@@ -69,10 +69,14 @@ class CursorWrapper(Cursor):
                     time.sleep(15)
                     continue
                 else:
-                    o = self.connection.odps
                     if e.instance_id:
-                        instance = o.get_instance(e.instance_id)
-                        logger.error(instance.get_logview_address())
+                        # LogView URLs contain temporary access tokens. Keep
+                        # the stable instance identifier in logs without
+                        # serializing the signed URL.
+                        logger.error(
+                            f"MaxCompute instance failed: {e.instance_id}; "
+                            "signed LogView URL omitted"
+                        )
                     raise e
 
     def _resolve_maxqa(self, settings):

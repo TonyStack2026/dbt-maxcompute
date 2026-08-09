@@ -53,6 +53,12 @@ pip install dbt-core
 pip install dbt-maxcompute
 ```
 
+To run Python models on MaxFrame, install the optional MaxFrame runtime:
+
+```bash
+pip install "dbt-maxcompute[maxframe]"
+```
+
 ### Configure dbt profile:
 
 1. Create a file in the ~/.dbt/ directory named profiles.yml.
@@ -89,6 +95,9 @@ Currently we support the following parameters：
 | `quota_name`        | Interactive quota group name for MaxQA. When omitted, the server returns a default connection (if available). | -                                     |
 | `maxqa_fallback`    | Enable server-side fallback to offline when MaxQA cannot handle a query (e.g. DDL).                         | `true`                                |
 | `maxqa_fallback_quota` | Offline quota group name used for fallback. When omitted, the server uses the project default.           | -                                     |
+| `submission_method` | Default Python model submission method. The supported value is `maxframe`. | `maxframe` |
+| `maxframe_quota_name` | Optional quota used by MaxFrame sessions. | Project default |
+| `maxframe_retries` | Number of new-session retries for transient MaxFrame DAG transport failures. | `2` |
 | Other auth options  | Alternative authentication methods such as STS. See [Authentication Configuration](docs/authentication.md). | **Varies by auth type**               |
 
 > **Note**: Fields marked with "Required" must be explicitly specified in your configuration.
@@ -189,6 +198,100 @@ SELECT ...
 ```
 
 The `dbt.execution_mode` and `dbt.quota_name` hints are consumed by the adapter and never sent to MaxCompute.
+
+
+### MaxFrame Python Models
+
+Python models can use MaxFrame DataFrames with the standard dbt `ref`, `source`,
+`config`, and `this` objects. The adapter creates an isolated MaxFrame session,
+writes to a dbt intermediate table, and then uses the normal table swap flow so
+an existing target is not replaced until the MaxFrame job succeeds.
+
+See the [MaxFrame Python Models guide](docs/maxframe-python-models.md) for the
+complete installation, partitioning, incremental, operations, and migration
+reference.
+
+```python
+def model(dbt, session):
+    dbt.config(
+        materialized="table",
+        submission_method="maxframe",
+        timeout=3600,
+        lifecycle=7,
+    )
+
+    orders = dbt.ref("stg_orders")
+    return orders[orders.amount > 0][["order_id", "amount"]]
+```
+
+Run it like any other dbt model:
+
+```bash
+dbt run --select path:models/my_maxframe_model.py
+```
+
+The dbt output includes the MaxFrame session ID and reports whether LogView is
+available. Signed LogView URLs are not written to logs or artifacts because
+they contain temporary access tokens. Model-level `sql_hints` are forwarded to
+MaxFrame, and `maxframe_quota_name` can be set in the model or profile.
+
+Table and incremental materializations support regular MaxCompute partitions.
+Both the MaxCompute plural form and the BigQuery-style singular form are
+accepted, which makes migrated Python models easier to reuse:
+
+```python
+def model(dbt, session):
+    dbt.config(
+        materialized="incremental",
+        incremental_strategy="merge",
+        unique_key="order_id",
+        partition_by={"field": "ds", "data_type": "string"},
+        on_schema_change="sync_all_columns",
+    )
+
+    orders = dbt.ref("stg_orders")
+    if dbt.is_incremental:
+        # Replace this predicate with the project's watermark policy.
+        orders = orders[orders["order_id"] > 1_000_000]
+    return orders
+```
+
+Time columns create MaxCompute automatic partitions. `granularity` and
+`generate_column_name` control the generated partition column:
+
+```python
+partition_by={
+    "field": "event_time",
+    "data_type": "timestamp",
+    "granularity": "day",
+    "generate_column_name": "ds",
+}
+```
+
+Supported incremental strategies are `merge`, `append`, `delete+insert`,
+`insert_overwrite`, and `microbatch`. Incremental targets are created as
+transactional MaxCompute tables because MaxCompute `MERGE` requires that
+property. Python microbatch models apply dbt's half-open event-time window to
+the returned DataFrame before writing each batch.
+
+Writes are failure-safe: table models and Python full refreshes build an
+intermediate relation and swap it only after the MaxFrame DAG succeeds. Failed
+DAG output relations are removed with bounded retries. Automatic-partition
+staging tables use lifecycle `1` and are cleaned before reuse and after a
+successful run. Transient DAG transport errors are retried in a new MaxFrame
+session (`maxframe_retries`, default `2`) without rebuilding the user's Python
+model graph.
+
+Current intentional differences from dbt-bigquery Python models:
+
+- `cluster_by` is rejected because MaxCompute partitioning and transactional
+  tables do not provide BigQuery's clustering contract.
+- Enforced dbt model contracts are rejected for Python models. Schema changes
+  on incremental models should use `on_schema_change`.
+- `packages` is not installed dynamically into the dbt process. Install
+  graph-building dependencies in the dbt runtime. For dependencies used by a
+  remote MaxFrame UDF, decorate the function with
+  `maxframe.udf.with_python_requirements(...)`.
 
 
 ## Compatible dbt Packages for MaxCompute

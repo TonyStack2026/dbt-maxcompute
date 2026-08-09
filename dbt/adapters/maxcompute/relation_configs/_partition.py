@@ -41,10 +41,24 @@ class PartitionConfig(dbtClassMixin):
         if raw_partition_by is None:
             return None
         try:
+            if not isinstance(raw_partition_by, dict):
+                raise TypeError
+            raw_partition_by = dict(raw_partition_by)
+            alias_pairs = (("field", "fields"), ("data_type", "data_types"))
+            for alias, canonical in alias_pairs:
+                if alias in raw_partition_by:
+                    if canonical in raw_partition_by:
+                        raise dbt_common.exceptions.DbtValidationError(
+                            f"Invalid partition_by config: use either `{alias}` or "
+                            f"`{canonical}`, not both"
+                        )
+                    raw_partition_by[canonical] = raw_partition_by.pop(alias)
+
             new_dict = {}
             for key, value in raw_partition_by.items():
                 if key in ["fields", "data_types"]:
-                    new_dict[key] = [item.strip() for item in value.split(",")]
+                    values = value.split(",") if isinstance(value, str) else value
+                    new_dict[key] = [str(item).strip() for item in values]
                 else:
                     new_dict[key] = value
             res = cls.from_dict(new_dict)

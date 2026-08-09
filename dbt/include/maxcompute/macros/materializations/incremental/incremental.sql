@@ -1,5 +1,7 @@
 
-{% materialization incremental,  adapter='maxcompute' -%}
+{% materialization incremental, adapter='maxcompute', supported_languages=['sql', 'python'] -%}
+  {%- set language = model['language'] -%}
+  {%- set build_code = compiled_code if language == 'python' else sql -%}
   {%- set raw_partition_by = config.get('partition_by', none) -%}
   {%- set partition_by = adapter.parse_partition_by(raw_partition_by) -%}
   {%- set partitions = config.get('partitions', none) -%}
@@ -8,6 +10,10 @@
 
   {%- set cluster_by = config.get('cluster_by', none) -%}
   {%- set tblproperties = config.get('tblproperties', none) -%}
+  {%- set primary_keys = config.get('primary_keys', none) -%}
+  {#-- MaxCompute MERGE and the existing SQL incremental contract require a --#}
+  {#-- transactional target. Keep Python-created relations consistent.       --#}
+  {%- set is_transactional = true -%}
   {%- set incremental_strategy = config.get('incremental_strategy') or 'merge' -%}
   {%- set sql_hints = config.get('sql_hints', none) -%}
   {%- set sql_header = merge_sql_hints_and_header(sql_hints, config.get('sql_header', none)) -%}
@@ -16,8 +22,10 @@
   {%- set existing_relation = load_cached_relation(this) -%}
   {%- set target_relation = this.incorporate(type='table') -%}
   {%- set temp_relation = make_temp_relation(target_relation)-%}
+  {%- set intermediate_relation = make_intermediate_relation(target_relation) -%}
   {%- set backup_relation_type = 'table' if existing_relation is none else existing_relation.type -%}
   {%- set backup_relation = make_backup_relation(target_relation, backup_relation_type) -%}
+  {%- set did_python_full_refresh_swap = false -%}
 
   -- configs
   {%- set unique_key = config.get('unique_key') -%}
@@ -32,9 +40,26 @@
   {%- set full_refresh_mode = (should_full_refresh() or existing_relation.is_view) -%}
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
 
+  {% if incremental_strategy == 'microbatch' %}
+    {% do mc_validate_microbatch_config(partition_by, config.get('batch_size'), config.get('event_time')) %}
+  {% endif %}
+
 
   {% if unique_key_list|length > 0 and config.get('incremental_strategy')=='append' %}
       {% do exceptions.raise_compiler_error('append strategy is not supported for incremental models with a unique key when using MaxCompute') %}
+  {% endif %}
+
+  {% if language == 'python' and cluster_by %}
+      {% do exceptions.raise_compiler_error(
+          "MaxFrame Python models do not support cluster_by because "
+          "MaxCompute has no equivalent BigQuery clustering contract"
+      ) %}
+  {% endif %}
+  {% set contract_config = config.get('contract') %}
+  {% if language == 'python' and contract_config.enforced %}
+      {% do exceptions.raise_compiler_error(
+          "MaxFrame Python models do not support enforced contracts yet"
+      ) %}
   {% endif %}
 
 
@@ -43,32 +68,148 @@
   -- later, before we try to use this name for the current operation. This has to happen before
   -- BEGIN, in a separate transaction
   {%- set preexisting_temp_relation = load_cached_relation(temp_relation)-%}
+  {%- set preexisting_intermediate_relation = load_cached_relation(intermediate_relation)-%}
   {%- set preexisting_backup_relation = load_cached_relation(backup_relation) -%}
    -- grab current tables grants config for comparision later on
   {% set grant_config = config.get('grants') %}
   {{ drop_relation_if_exists(preexisting_temp_relation) }}
+  {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
   {{ drop_relation_if_exists(preexisting_backup_relation) }}
 
   {{ run_hooks(pre_hooks) }}
 
   {% if existing_relation is none %}
-    {%- call statement('main') -%}
-        {{ create_table_as_internal(False, target_relation, sql, True, partition_config=partition_by, lifecycle=lifecycle, tblproperties=tblproperties) }}
-    {%- endcall -%}
-  {% elif full_refresh_mode %}
-      {% do log("Hard refreshing " ~ existing_relation) %}
-      {{ adapter.drop_relation(existing_relation) }}
+    {% if language == 'python' %}
+      {% if partition_by is not none and partition_by.auto_partition() %}
+        {% set stage_relation = make_temp_relation(target_relation, '__dbt_maxframe_stage') %}
+        {{ drop_relation_if_exists(load_relation(stage_relation)) }}
+        {% call statement('main', language='python') -%}
+{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
+        {%- endcall %}
+        {% call statement('create_auto_partition_relation', language='sql') -%}
+          {{ create_table_as_internal(
+              false,
+              target_relation,
+              'select * from ' ~ stage_relation,
+              is_transactional,
+              primary_keys,
+              config.get('delta_table_bucket_num', 16),
+              partition_by,
+              lifecycle,
+              tblproperties
+          ) }}
+        {%- endcall %}
+        {{ adapter.drop_relation(stage_relation) }}
+      {% else %}
+        {% call statement('main', language='python') -%}
+{{ maxframe_write_table(
+    compiled_code,
+    target_relation,
+    partition_config=partition_by,
+    lifecycle=lifecycle,
+    tblproperties=tblproperties,
+    primary_keys=primary_keys,
+    is_transactional=is_transactional
+).lstrip() }}
+        {%- endcall %}
+      {% endif %}
+    {% else %}
       {%- call statement('main') -%}
         {{ create_table_as_internal(False, target_relation, sql, True, partition_config=partition_by, lifecycle=lifecycle, tblproperties=tblproperties) }}
       {%- endcall -%}
+    {% endif %}
+  {% elif full_refresh_mode %}
+      {% do log("Hard refreshing " ~ existing_relation) %}
+      {% if language == 'python' %}
+        {% if partition_by is not none and partition_by.auto_partition() %}
+          {% set stage_relation = make_temp_relation(intermediate_relation, '__dbt_maxframe_stage') %}
+          {{ drop_relation_if_exists(load_relation(stage_relation)) }}
+          {% call statement('main', language='python') -%}
+{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
+          {%- endcall %}
+          {% call statement('create_auto_partition_relation', language='sql') -%}
+            {{ create_table_as_internal(
+                false,
+                intermediate_relation,
+                'select * from ' ~ stage_relation,
+                is_transactional,
+                primary_keys,
+                config.get('delta_table_bucket_num', 16),
+                partition_by,
+                lifecycle,
+                tblproperties
+            ) }}
+          {%- endcall %}
+          {{ adapter.drop_relation(stage_relation) }}
+        {% else %}
+          {% call statement('main', language='python') -%}
+{{ maxframe_write_table(
+    compiled_code,
+    intermediate_relation,
+    partition_config=partition_by,
+    lifecycle=lifecycle,
+    tblproperties=tblproperties,
+    primary_keys=primary_keys,
+    is_transactional=is_transactional
+).lstrip() }}
+          {%- endcall %}
+        {% endif %}
+        {% set existing_relation = load_cached_relation(existing_relation) %}
+        {% if existing_relation is not none %}
+          {{ adapter.rename_relation(existing_relation, backup_relation) }}
+        {% endif %}
+        {{ adapter.rename_relation(intermediate_relation, target_relation) }}
+        {% set did_python_full_refresh_swap = true %}
+      {% else %}
+        {{ adapter.drop_relation(existing_relation) }}
+        {%- call statement('main') -%}
+          {{ create_table_as_internal(False, target_relation, sql, True, partition_config=partition_by, lifecycle=lifecycle, tblproperties=tblproperties) }}
+        {%- endcall -%}
+      {% endif %}
   {% else %}
     {% set temp_relation_exists = false %}
-    {% if on_schema_change != 'ignore' %}
+    {% if language == 'python' or on_schema_change != 'ignore' %}
       {#-- Check first, since otherwise we may not build a temp table --#}
       {#-- Python always needs to create a temp table --#}
-      {%- call statement('create_temp_relation') -%}
-        {{ create_table_as_internal(True, temp_relation, sql, True, partition_config=partition_by, tblproperties=tblproperties) }}
-      {%- endcall -%}
+      {% if language == 'python' %}
+        {% if partition_by is not none and partition_by.auto_partition() %}
+          {% set stage_relation = make_temp_relation(temp_relation, '__dbt_maxframe_stage') %}
+          {{ drop_relation_if_exists(load_relation(stage_relation)) }}
+          {% call statement('create_temp_relation_maxframe_stage', language='python') -%}
+{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
+          {%- endcall %}
+          {% call statement('create_temp_relation', language='sql') -%}
+            {{ create_table_as_internal(
+                true,
+                temp_relation,
+                'select * from ' ~ stage_relation,
+                is_transactional,
+                primary_keys,
+                config.get('delta_table_bucket_num', 16),
+                partition_by,
+                1,
+                tblproperties
+            ) }}
+          {%- endcall %}
+          {{ adapter.drop_relation(stage_relation) }}
+        {% else %}
+          {% call statement('create_temp_relation', language='python') -%}
+{{ maxframe_write_table(
+    compiled_code,
+    temp_relation,
+    partition_config=partition_by,
+    lifecycle=1,
+    tblproperties=tblproperties,
+    primary_keys=primary_keys,
+    is_transactional=is_transactional
+).lstrip() }}
+          {%- endcall %}
+        {% endif %}
+      {% else %}
+        {%- call statement('create_temp_relation') -%}
+          {{ create_table_as_internal(True, temp_relation, sql, True, partition_config=partition_by, tblproperties=tblproperties) }}
+        {%- endcall -%}
+      {% endif %}
       {% set temp_relation_exists = true %}
       {#-- Process schema changes. Returns dict of changes if successful. Use source columns for upserting/merging --#}
       {% set dest_columns = process_schema_changes(on_schema_change, temp_relation, existing_relation) %}
@@ -79,7 +220,7 @@
     {% endif %}
 
     {% set build_sql = mc_generate_incremental_build_sql(
-        incremental_strategy, temp_relation, target_relation, sql, unique_key, partition_by, partitions, dest_columns, temp_relation_exists, incremental_predicates, tblproperties
+        incremental_strategy, temp_relation, target_relation, build_code, unique_key, partition_by, partitions, dest_columns, temp_relation_exists, incremental_predicates, tblproperties
     ) %}
 
     {#- For dbt-origin strategies (merge / delete+insert / append),               -#}
@@ -90,6 +231,9 @@
     {#- emit their own `drop table if exists` in the generated SQL.               -#}
     {%- if incremental_strategy not in ('insert_overwrite', 'microbatch') -%}
         {% set temp_relation_exists = true %}
+    {%- elif language == 'python' -%}
+        {#-- These strategies include `drop table if exists` in build_sql. --#}
+        {% set temp_relation_exists = false %}
     {%- endif -%}
 
     {% call statement("main") %}
@@ -105,6 +249,10 @@
   {% do persist_docs(target_relation, model) %}
 
   {{ run_hooks(post_hooks) }}
+
+  {%- if did_python_full_refresh_swap -%}
+    {{ drop_relation_if_exists(backup_relation) }}
+  {%- endif -%}
 
   {%- if temp_relation_exists -%}
     {{ adapter.drop_relation(temp_relation) }}

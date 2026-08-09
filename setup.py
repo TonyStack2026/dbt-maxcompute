@@ -58,6 +58,9 @@ setup(
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.11.2",
     ],
+    extras_require={
+        "maxframe": ["maxframe>=2.7.1,<3.0.0"],
+    },
     zip_safe=False,
     classifiers=[
         "Development Status :: 5 - Production/Stable",

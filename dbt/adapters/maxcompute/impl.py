@@ -3,7 +3,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from multiprocessing.context import SpawnContext
-from typing import Optional, List, Dict, Any, Set, FrozenSet, Tuple
+from typing import Optional, List, Dict, Any, Set, FrozenSet, Tuple, Type
 
 import agate
 import numpy as np
@@ -11,7 +11,7 @@ import odps.models
 import pandas as pd
 import pytz
 from agate import Table
-from dbt.adapters.base import ConstraintSupport, available
+from dbt.adapters.base import ConstraintSupport, PythonJobHelper, available
 from dbt.adapters.base.impl import FreshnessResponse
 from dbt.adapters.base.relation import InformationSchema
 from dbt.adapters.capability import (
@@ -34,6 +34,10 @@ from dbt.adapters.maxcompute import MaxComputeConnectionManager
 from dbt.adapters.maxcompute.column import MaxComputeColumn
 from dbt.adapters.maxcompute.relation import MaxComputeRelation
 from dbt.adapters.events.logging import AdapterLogger
+from dbt.adapters.maxcompute.python_submissions import (
+    MaxFramePythonJobHelper,
+    MaxFrameSubmissionResult,
+)
 
 from dbt.adapters.maxcompute.relation_configs._partition import PartitionConfig
 from dbt.adapters.maxcompute.relation_configs._materialized_view import (
@@ -52,6 +56,11 @@ class MaxComputeConfig(AdapterConfig):
     primaryKeys: Optional[List[Dict[str, str]]] = None
     sqlHints: Optional[Dict[str, str]] = None
     tblProperties: Optional[Dict[str, str]] = None
+
+    submission_method: Optional[str] = None
+    timeout: Optional[int] = None
+    maxframe_quota_name: Optional[str] = None
+    maxframe_retries: Optional[int] = None
 
 
 class MaxComputeAdapter(SQLAdapter):
@@ -89,6 +98,33 @@ class MaxComputeAdapter(SQLAdapter):
     def get_odps_client(self) -> ODPS:
         conn = self.acquire_connection()
         return conn.handle.odps
+
+    @property
+    def default_python_submission_method(self) -> str:
+        configured_method = getattr(
+            self.connections.profile.credentials, "submission_method", None
+        )
+        return configured_method or "maxframe"
+
+    @property
+    def python_submission_helpers(self) -> Dict[str, Type[PythonJobHelper]]:
+        return {"maxframe": MaxFramePythonJobHelper}
+
+    def generate_python_submission_response(
+        self, submission_result: Any
+    ) -> AdapterResponse:
+        if isinstance(submission_result, MaxFrameSubmissionResult):
+            # LogView URLs contain temporary access tokens, so expose the
+            # stable session identifier without serializing the URL into dbt
+            # artifacts or event logs. The session remains useful even when
+            # LogView address generation is unavailable.
+            message = f"OK (MaxFrame session: {submission_result.run_id})"
+            return AdapterResponse(
+                _message=message,
+                code=submission_result.compiled_code,
+                query_id=submission_result.run_id,
+            )
+        return AdapterResponse(_message="OK")
 
     @available.parse_none
     def get_odps_table_by_relation(

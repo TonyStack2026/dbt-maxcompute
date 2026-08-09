@@ -21,6 +21,11 @@ class MaxComputeCredentials(Credentials):
     maxqa_fallback: bool = True
     maxqa_fallback_quota: Optional[str] = None
 
+    # Python model submission
+    submission_method: Optional[str] = None
+    maxframe_quota_name: Optional[str] = None
+    maxframe_retries: Optional[int] = None
+
     # auth config: All configuration items supported by alibabacloud_credentials
     # It should be noted that in order to avoid ambiguity,
     # `type` becomes `auth_type`, `policy` becomes `auth_policy`, `host` becomes `auth_host`,

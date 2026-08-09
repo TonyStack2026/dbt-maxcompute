@@ -1,4 +1,40 @@
-{% macro maxcompute__create_table_as(temporary, relation, sql) -%}
+{% macro maxcompute__create_table_as(temporary, relation, sql, language='sql') -%}
+    {%- if language == 'python' -%}
+        {%- set submission_method = config.get('submission_method', 'maxframe') -%}
+        {%- if submission_method != 'maxframe' -%}
+            {% do exceptions.raise_compiler_error(
+                "maxcompute__create_table_as received unsupported Python submission method '%s'" % submission_method
+            ) %}
+        {%- endif -%}
+        {%- if config.get('cluster_by') -%}
+            {% do exceptions.raise_compiler_error(
+                "MaxFrame Python models do not support cluster_by because "
+                "MaxCompute has no equivalent BigQuery clustering contract"
+            ) %}
+        {%- endif -%}
+        {%- set partition_config = adapter.parse_partition_by(config.get('partition_by', none)) -%}
+        {%- if partition_config is not none and partition_config.auto_partition() -%}
+            {% do exceptions.raise_compiler_error(
+                "Automatic time partitioning for MaxFrame Python models must be "
+                "created through the MaxCompute table or incremental materialization"
+            ) %}
+        {%- endif -%}
+        {%- set contract_config = config.get('contract') -%}
+        {%- if contract_config.enforced -%}
+            {% do exceptions.raise_compiler_error(
+                "MaxFrame Python table models do not support enforced contracts yet"
+            ) %}
+        {%- endif -%}
+{{ maxframe_write_table(
+    sql,
+    relation,
+    partition_config=partition_config,
+    lifecycle=config.get('lifecycle', none),
+    tblproperties=config.get('tblproperties', none),
+    primary_keys=config.get('primary_keys', none),
+    is_transactional=config.get('transactional') or config.get('delta')
+) }}
+    {%- elif language == 'sql' -%}
     {%- set is_transactional = config.get('transactional') or config.get('delta') -%}
     {%- set primary_keys = config.get('primary_keys') -%}
     {%- set delta_table_bucket_num = config.get('delta_table_bucket_num', 16)-%}
@@ -7,6 +43,89 @@
     {%- set tblproperties = config.get('tblproperties', none) -%}
     {%- set partition_config = adapter.parse_partition_by(raw_partition_by) -%}
     {{ create_table_as_internal(temporary, relation, sql, is_transactional, primary_keys, delta_table_bucket_num, partition_config, lifecycle, tblproperties) }}
+    {%- else -%}
+        {% do exceptions.raise_compiler_error(
+            "maxcompute__create_table_as received unsupported language '%s'" % language
+        ) %}
+    {%- endif -%}
+{%- endmacro %}
+
+
+{% macro maxframe_write_table(
+    compiled_code,
+    target_relation,
+    partition_config=none,
+    lifecycle=none,
+    tblproperties=none,
+    primary_keys=none,
+    is_transactional=false
+) -%}
+import maxframe.dataframe as md
+from maxframe.dataframe.core import DATAFRAME_TYPE
+
+_dbt_maxframe_target_relation = {{ (target_relation.without_quote() | string) | tojson }}
+
+{{ compiled_code }}
+
+def _dbt_maxframe_load_relation(relation_name):
+    # dbt renders MaxCompute relations with backticks, while PyODPS expects
+    # unquoted project.schema.table components.
+    return md.read_odps_table(relation_name.replace("`", ""), odps_entry=odps_entry)
+
+dbt = dbtObj(_dbt_maxframe_load_relation)
+df = model(dbt, maxframe_session)
+
+if not isinstance(df, DATAFRAME_TYPE):
+    raise TypeError(
+        f"{type(df)} is not a supported type for dbt MaxFrame materialization; "
+        "model() must return a MaxFrame DataFrame"
+    )
+
+{% set _dbt_microbatch_event_time = config.get('event_time', none) %}
+{% set _dbt_microbatch_start = config.get('__dbt_internal_microbatch_event_time_start', none) %}
+{% set _dbt_microbatch_end = config.get('__dbt_internal_microbatch_event_time_end', none) %}
+{% if _dbt_microbatch_event_time and _dbt_microbatch_start and _dbt_microbatch_end %}
+import pandas as _dbt_pandas
+
+_dbt_maxframe_event_time_start = _dbt_pandas.Timestamp(
+    {{ _dbt_microbatch_start.isoformat() | tojson }}
+).tz_localize(None)
+_dbt_maxframe_event_time_end = _dbt_pandas.Timestamp(
+    {{ _dbt_microbatch_end.isoformat() | tojson }}
+).tz_localize(None)
+_dbt_maxframe_event_time_series = df[
+    {{ _dbt_microbatch_event_time | tojson }}
+].astype("datetime64[ns]")
+df = df[
+    (_dbt_maxframe_event_time_series >= _dbt_maxframe_event_time_start)
+    & (_dbt_maxframe_event_time_series < _dbt_maxframe_event_time_end)
+]
+{% endif %}
+
+_dbt_maxframe_table_properties = dict({{ tblproperties or {} }})
+{% if is_transactional %}
+_dbt_maxframe_table_properties["transactional"] = "true"
+{% endif %}
+
+_dbt_maxframe_sink = md.to_odps_table(
+    df,
+    _dbt_maxframe_target_relation,
+    overwrite=True,
+    index=False,
+    {%- if partition_config is not none and partition_config.fields %}
+    partition_col={{ partition_config.fields }},
+    {%- endif %}
+    {%- if lifecycle is not none %}
+    lifecycle={{ lifecycle }},
+    {%- endif %}
+    {%- if tblproperties or is_transactional %}
+    table_properties=_dbt_maxframe_table_properties,
+    {%- endif %}
+    {%- if primary_keys %}
+    primary_key={{ primary_keys }},
+    {%- endif %}
+)
+_dbt_maxframe_execute(_dbt_maxframe_sink)
 {%- endmacro %}
 
 
