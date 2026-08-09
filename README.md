@@ -28,17 +28,21 @@ analyze large volumes of data and gain real-time business insights.
 This repository contains the foundational code for the **dbt-maxcompute** adapter plugin. For guidance on developing the
 adapter, please refer to the [official documentation](https://docs.getdbt.com/docs/contributing/building-a-new-adapter).
 
-### Important Note
-
-The `README` you are currently viewing will be updated with specific instructions and details on how to utilize the
-adapter as development progresses.
-
 ### Adapter Versioning
 
-This adapter plugin follows [semantic versioning](https://semver.org/). The initial version is **v1.8.0-a0**, designed
-for compatibility with dbt Core v1.8.0. Since the plugin is in its early stages, the version number **a0** indicates
-that it is an Alpha release. A stable version will be released in the future, focusing on MaxCompute-specific
-functionality and aiming for backwards compatibility.
+This adapter follows [semantic versioning](https://semver.org/) and the dbt Core
+1.11 compatibility line. Individual capabilities can have a narrower maturity
+level than the adapter package:
+
+| Capability | Status | Intended use |
+|---|---|---|
+| SQL models and established materializations | Generally Available | Production |
+| MaxFrame Python models | **Production Preview** | Selected production workloads after reviewing documented limitations |
+| Python scalar and aggregate UDFs | **Beta** | Evaluation and controlled workloads; dependency conventions may change before GA |
+
+Production Preview and Beta limitations are documented in their respective
+guides. Pre-release package versions such as `1.11.3b1` do not replace the
+latest stable release.
 
 ## Getting Started
 
@@ -292,6 +296,53 @@ Current intentional differences from dbt-bigquery Python models:
   graph-building dependencies in the dbt runtime. For dependencies used by a
   remote MaxFrame UDF, decorate the function with
   `maxframe.udf.with_python_requirements(...)`.
+
+
+### Python UDFs
+
+dbt `functions:` resources can create persistent MaxCompute Python scalar and
+aggregate functions. Scalar functions keep the standard dbt plain-function
+authoring experience; aggregate functions use MaxCompute's bounded
+`BaseUDAF` buffer lifecycle.
+
+See the [Python UDF guide](docs/python-udfs.md) for deployment safety,
+dependencies, data types, UDAF examples, and BigQuery migration differences.
+
+```python
+# functions/double_value.py
+def main(value):
+    return None if value is None else value * 2
+```
+
+```yaml
+# functions/double_value.yml
+functions:
+  - name: double_value
+    config:
+      entry_point: main
+      runtime_version: "3.11"
+    arguments:
+      - name: value
+        data_type: bigint
+    returns:
+      data_type: bigint
+```
+
+Build and reference it through dbt's normal function DAG:
+
+```bash
+dbt build --select double_value
+```
+
+```sql
+select {{ function('double_value') }}(quantity) from {{ ref('orders') }}
+```
+
+dbt-maxcompute defaults SQL UDF execution to MaxCompute CPython 3.11
+(`cp311`). Third-party libraries must be uploaded as compatible MaxCompute
+resources; dynamic dbt `packages` installation is not available on this
+runtime. To avoid repeating `runtime_version` on every Python function, set
+`functions: {+runtime_version: "3.11"}` once in `dbt_project.yml`.
 
 
 ## Compatible dbt Packages for MaxCompute

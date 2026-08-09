@@ -1,5 +1,8 @@
 # MaxFrame Python Models
 
+> **Status: Production Preview (`1.11.3b1`).** Suitable for selected production
+> workloads after reviewing the limitations and operational guidance below.
+
 `dbt-maxcompute` can execute dbt Python models as MaxFrame DataFrame jobs and
 materialize their results as MaxCompute tables.
 
@@ -105,6 +108,17 @@ The second argument to `model` is the MaxFrame session created for that dbt
 node. `dbt.ref` and `dbt.source` return lazy MaxFrame DataFrames, so normal
 MaxFrame filtering, projection, joins, aggregations, and UDF operations can be
 used before returning the final DataFrame.
+
+Use pandas-style boolean indexing for row filters:
+
+```python
+orders = orders[orders["amount"] > 0]
+```
+
+Do not port `df.filter(boolean_expression)` literally from another DataFrame
+API. In MaxFrame, `DataFrame.filter` selects labels; it is not the row-filter
+operation. Also prefer `df["id"]` over `df.id` for a column named `id`, because
+MaxFrame reserves `DataFrame.id` for its internal tileable identifier.
 
 ## Reading refs and sources
 
@@ -328,8 +342,10 @@ def normalize(value):
     return np.log1p(value)
 ```
 
-This is different from dbt's `functions:` resource. The official dbt UDF
-resource materialization is not currently implemented by `dbt-maxcompute`.
+This is different from dbt's persistent `functions:` resource. Persistent
+Python scalar and aggregate UDFs are documented in the
+[Python UDF guide](python-udfs.md); they use MaxCompute catalog functions and
+do not run inside the MaxFrame model DAG.
 
 ## Runtime and observability settings
 
@@ -338,7 +354,7 @@ resource materialization is not currently implemented by `dbt-maxcompute`.
 | `submission_method` | profile or model | `maxframe` | Python job backend. |
 | `maxframe_quota_name` | profile or model | project default | MaxFrame session quota. Model value wins. |
 | `maxframe_retries` | profile or model | `2` | New-session retries after a DAG transport failure. |
-| `timeout` | model | MaxFrame default | MaxFrame session timeout. |
+| `timeout` | model | `600` | MaxFrame session timeout in seconds. Increase it for queued or large DAGs. |
 | `lifecycle` | model | project behavior | Target table lifecycle in days. |
 | `sql_hints` | model | adapter defaults | MaxCompute SQL settings forwarded to MaxFrame. |
 
@@ -353,8 +369,12 @@ access token.
   MaxFrame DAG succeeds.
 - Python incremental `--full-refresh` follows the same intermediate/backup
   swap, so a model-computation failure does not delete the existing target.
-- Normal incremental runs write a lifecycle-1 temporary table before executing
-  the configured MaxCompute incremental SQL.
+- MaxFrame writes a lifecycle-1 staging table with a type-preserving internal
+  sentinel row, then MaxCompute SQL filters the sentinel before creating the
+  final or incremental temporary relation. This keeps empty table and empty
+  incremental outputs valid without collecting model data into the dbt process.
+- Normal incremental runs create a lifecycle-1 temporary table from that stage
+  before executing the configured MaxCompute incremental SQL.
 - Failed MaxFrame DAG output cleanup is retried up to three times.
 - Automatic-partition staging tables use lifecycle `1`, are removed before
   reuse, and are removed after a successful run. If execution fails after the
@@ -372,7 +392,6 @@ The following capabilities are intentionally unsupported or not yet complete:
 - `cluster_by`; MaxCompute does not provide BigQuery's clustering contract.
 - Enforced dbt model contracts for Python models.
 - Dynamic installation of model-level `packages`.
-- Official dbt `functions:` / UDF resource materialization.
 - dbt cancellation is not yet wired to the active MaxFrame execution object.
   A session is destroyed on normal completion or caught failure, but an
   interrupted worker is not guaranteed to cancel the remote DAG immediately.
@@ -381,16 +400,20 @@ The following capabilities are intentionally unsupported or not yet complete:
 
 1. Keep BigQuery-style `partition_by={"field": ..., "data_type": ...}`;
    the adapter accepts it directly.
-2. Remove `cluster_by` from Python models and design MaxCompute partitioning or
+2. Rewrite row predicates as MaxFrame boolean indexing, for example
+   `df[df["id"] > 5]`; do not assume another DataFrame API's `.filter(...)`
+   semantics are identical.
+3. Remove `cluster_by` from Python models and design MaxCompute partitioning or
    transactional-table layout instead.
-3. Replace model-level `packages` with environment installation or
+4. Replace model-level `packages` with environment installation or
    `with_python_requirements` for remote UDF code.
-4. `insert_overwrite` is available for MaxFrame Python models, but verify the
+5. `insert_overwrite` is available for MaxFrame Python models, but verify the
    incremental filter returns only partitions intended for replacement.
-5. Replace enforced Python contracts with dbt tests and
+6. Replace enforced Python contracts with dbt tests and
    `on_schema_change` where appropriate.
-6. Migrate dbt `functions:` resources separately; they are not part of the
-   MaxFrame model runtime.
+7. Migrate dbt `functions:` resources using the separate
+   [Python UDF workflow](python-udfs.md); they are not part of the MaxFrame
+   model runtime and default to MaxCompute CPython 3.11 (`cp311`).
 
 ## Troubleshooting
 

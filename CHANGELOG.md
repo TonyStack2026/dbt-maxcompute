@@ -5,6 +5,38 @@ All notable changes to `dbt-maxcompute` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.3b1] — 2026-08-09
+
+### Added
+
+- **MaxFrame Python models (Production Preview)** with table and incremental
+  materializations, MaxCompute partitions, five incremental strategies,
+  microbatch windows, schema evolution, isolated sessions, empty-output-safe
+  staging, and bounded retry handling for transient DAG transport failures.
+- **Python scalar and aggregate UDFs (Beta)** using dbt `functions:` resources,
+  MaxCompute CPython 3.11 by default, generated `@annotate` signatures,
+  content-addressed PY resources, safe in-place updates, managed-resource
+  cleanup, and user-supplied dependency resources.
+
+### Changed
+
+- SQL submitted by the adapter now defaults
+  `odps.sql.python.version` to `cp311`. Legacy CPython 3.7 UDF calls must
+  explicitly override the session hint to `cp37`.
+- Python function resources can inherit a project-wide
+  `functions: +runtime_version: "3.11"` default, avoiding repeated CP311
+  configuration while satisfying dbt Core's function contract.
+- The README now reports capability-level maturity instead of the obsolete
+  repository-wide Alpha label.
+- The MaxFrame guide now documents pandas-style boolean row filtering and the
+  `DataFrame.id` name collision for users migrating from other DataFrame APIs.
+
+### Known limitations
+
+- MaxFrame cancellation is not yet propagated to an active remote DAG.
+- Python UDFs do not yet expose SQL UDFs, UDTFs, overloads, grants, default
+  arguments, or dynamic PyPI installation.
+
 ## [1.11.2] — 2026-06-03
 
 ### Added

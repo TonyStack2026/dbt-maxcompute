@@ -1,6 +1,8 @@
 import time
 import functools
+from typing import Callable, TypeVar
 
+from dbt.adapters.events.logging import AdapterLogger
 from odps.errors import ODPSError, NoSuchObject
 
 from pathlib import Path
@@ -40,9 +42,9 @@ def is_schema_not_found(e: ODPSError) -> bool:
     return False
 
 
-from dbt.adapters.events.logging import AdapterLogger
-
 logger = AdapterLogger("MaxCompute")
+
+T = TypeVar("T")
 
 
 def retry_on_exception(max_retries=3, delay=1, backoff=2, exceptions=(Exception,), condition=None):
@@ -75,3 +77,10 @@ def retry_on_exception(max_retries=3, delay=1, backoff=2, exceptions=(Exception,
         return wrapper_retry
 
     return decorator_retry
+
+
+@retry_on_exception(max_retries=3, delay=0.5, backoff=2, exceptions=(OSError,))
+def retry_on_transport_error(operation: Callable[[], T]) -> T:
+    """Retry a single idempotent ODPS cleanup operation after transport failures."""
+
+    return operation()

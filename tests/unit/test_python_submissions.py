@@ -1,11 +1,13 @@
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from dbt.cli.main import dbtRunner
 from dbt_common.exceptions import DbtRuntimeError
+from odps.errors import ODPSError
+from odps.types import Column, OdpsSchema
 
 from dbt.adapters.maxcompute.impl import MaxComputeAdapter
 from dbt.adapters.maxcompute.python_submissions import (
@@ -194,6 +196,13 @@ def test_model_level_quota_overrides_profile_quota():
     assert helper._maxframe_options()["session.quota_name"] == "model_quota"
 
 
+def test_model_schema_overrides_profile_default_schema():
+    helper = MaxFramePythonJobHelper(make_parsed_model(), make_credentials())
+    helper._parsed_model["schema"] = "generated_model_schema"
+
+    assert helper._maxframe_options()["session.default_schema"] == "generated_model_schema"
+
+
 def test_maxframe_retries_default_and_profile_override():
     credentials = make_credentials()
     helper = MaxFramePythonJobHelper(make_parsed_model(), credentials)
@@ -203,14 +212,28 @@ def test_maxframe_retries_default_and_profile_override():
     assert helper._maxframe_retries() == 4
 
 
+def test_maxframe_timeout_default_and_model_override():
+    assert (
+        MaxFramePythonJobHelper(
+            make_parsed_model(timeout=None), make_credentials()
+        )._maxframe_timeout()
+        == 600
+    )
+    assert (
+        MaxFramePythonJobHelper(
+            make_parsed_model(timeout=3600), make_credentials()
+        )._maxframe_timeout()
+        == 3600
+    )
+
+
 def test_submit_retries_dag_transport_failure_with_new_session():
     first_session = FakeSession("first-session")
     retry_session = FakeSession("retry-session")
     maxframe = SequencedMaxFrame(first_session, retry_session)
     credentials = make_credentials()
-    helper = MaxFramePythonJobHelper(
-        make_parsed_model(maxframe_retries=1), credentials
-    )
+    credentials.odps.return_value.retry_attempts = 0
+    helper = MaxFramePythonJobHelper(make_parsed_model(maxframe_retries=1), credentials)
 
     @contextmanager
     def option_context(_):
@@ -218,11 +241,9 @@ def test_submit_retries_dag_transport_failure_with_new_session():
 
     compiled_code = """
 class RetryOnceTileable:
-    attempts = 0
-
     def execute(self, session):
-        RetryOnceTileable.attempts += 1
-        if RetryOnceTileable.attempts == 1:
+        odps_entry.retry_attempts += 1
+        if odps_entry.retry_attempts == 1:
             raise ConnectionResetError("transient reset")
         maxframe_session.executed_with = session
 
@@ -238,8 +259,117 @@ _dbt_maxframe_execute(RetryOnceTileable())
     assert result.run_id == "retry-session"
     assert first_session.destroyed
     assert retry_session.destroyed
-    assert first_session.executed_with is retry_session
+    assert retry_session.executed_with is retry_session
     assert len(maxframe.new_session_kwargs) == 2
+
+
+class FakeTornadoHTTPClientError(Exception):
+    __module__ = "tornado.httpclient"
+
+    def __init__(self, code):
+        self.code = code
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ConnectionResetError("reset"), True),
+        (FakeTornadoHTTPClientError(500), False),
+        (FakeTornadoHTTPClientError(429), True),
+        (FakeTornadoHTTPClientError(400), False),
+        (ODPSError("server unavailable", status_code=500), True),
+        (ODPSError("bad request", status_code=400), False),
+        (ValueError("invalid model"), False),
+    ],
+)
+def test_transient_maxframe_error_classification(error, expected):
+    assert MaxFramePythonJobHelper._is_transient_maxframe_error(error) is expected
+
+
+def test_adds_type_preserving_sentinel_for_empty_safe_sink():
+    dataframe = MagicMock()
+    tagged_dataframe = MagicMock()
+    dataframe.assign.return_value = tagged_dataframe
+    odps_entry = MagicMock()
+    writer = odps_entry.create_table.return_value.open_writer.return_value.__enter__.return_value
+    temporary_relations = []
+    inferred_schema = OdpsSchema(columns=[Column("id", "bigint")])
+    sentinel_dataframe = MagicMock()
+    combined_dataframe = MagicMock()
+
+    fake_dataframe_module = ModuleType("maxframe.dataframe")
+    fake_dataframe_module.read_odps_table = MagicMock(return_value=sentinel_dataframe)
+    fake_dataframe_module.concat = MagicMock(return_value=combined_dataframe)
+    fake_maxframe_module = ModuleType("maxframe")
+    fake_maxframe_module.dataframe = fake_dataframe_module
+    fake_odpsio_module = ModuleType("maxframe.io.odpsio")
+    fake_odpsio_module.pandas_to_odps_schema = MagicMock(return_value=(inferred_schema, None))
+    fake_io_module = ModuleType("maxframe.io")
+    fake_io_module.odpsio = fake_odpsio_module
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "maxframe": fake_maxframe_module,
+            "maxframe.dataframe": fake_dataframe_module,
+            "maxframe.io": fake_io_module,
+            "maxframe.io.odpsio": fake_odpsio_module,
+        },
+    ):
+        result = MaxFramePythonJobHelper._with_sentinel(
+            dataframe,
+            "project.analytics.model__dbt_stage",
+            odps_entry,
+            temporary_relations,
+        )
+
+    assert result is combined_dataframe
+    assert len(temporary_relations) == 1
+    assert temporary_relations[0].startswith("project.analytics.__dbt_mf_sentinel_")
+    created_schema = odps_entry.create_table.call_args.args[1]
+    assert [column.name for column in created_schema.columns] == [
+        "id",
+        "__dbt_maxframe_sentinel",
+    ]
+    writer.write.assert_called_once_with([[None, True]])
+    dataframe.assign.assert_called_once_with(__dbt_maxframe_sentinel=False)
+    fake_dataframe_module.read_odps_table.assert_called_once_with(
+        temporary_relations[0], odps_entry=odps_entry
+    )
+    fake_dataframe_module.concat.assert_called_once_with(
+        [tagged_dataframe, sentinel_dataframe], ignore_index=True
+    )
+
+
+def test_rejects_model_column_that_conflicts_with_sentinel():
+    dataframe = MagicMock()
+    inferred_schema = OdpsSchema(columns=[Column("__DBT_MAXFRAME_SENTINEL", "boolean")])
+    fake_dataframe_module = ModuleType("maxframe.dataframe")
+    fake_maxframe_module = ModuleType("maxframe")
+    fake_maxframe_module.dataframe = fake_dataframe_module
+    fake_odpsio_module = ModuleType("maxframe.io.odpsio")
+    fake_odpsio_module.pandas_to_odps_schema = MagicMock(return_value=(inferred_schema, None))
+    fake_io_module = ModuleType("maxframe.io")
+    fake_io_module.odpsio = fake_odpsio_module
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {
+                "maxframe": fake_maxframe_module,
+                "maxframe.dataframe": fake_dataframe_module,
+                "maxframe.io": fake_io_module,
+                "maxframe.io.odpsio": fake_odpsio_module,
+            },
+        ),
+        pytest.raises(DbtRuntimeError, match="reserve the column name"),
+    ):
+        MaxFramePythonJobHelper._with_sentinel(
+            dataframe,
+            "project.analytics.model__dbt_stage",
+            MagicMock(),
+            [],
+        )
 
 
 @pytest.mark.parametrize("retries", [-1, "invalid"])
@@ -252,10 +382,16 @@ def test_invalid_maxframe_retries_fail_with_actionable_error(retries):
         helper._maxframe_retries()
 
 
+@pytest.mark.parametrize("timeout", [0, -1, "invalid"])
+def test_invalid_maxframe_timeout_fails_with_actionable_error(timeout):
+    helper = MaxFramePythonJobHelper(make_parsed_model(timeout=timeout), make_credentials())
+
+    with pytest.raises(DbtRuntimeError, match="positive integer"):
+        helper._maxframe_timeout()
+
+
 def test_packages_fail_with_actionable_error():
-    with pytest.raises(
-        DbtRuntimeError, match="does not support model-level `packages`"
-    ):
+    with pytest.raises(DbtRuntimeError, match="does not support model-level `packages`"):
         MaxFramePythonJobHelper(
             make_parsed_model(packages=["scikit-learn==1.7.0"]), make_credentials()
         )

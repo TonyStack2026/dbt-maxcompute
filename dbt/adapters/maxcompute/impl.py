@@ -38,12 +38,21 @@ from dbt.adapters.maxcompute.python_submissions import (
     MaxFramePythonJobHelper,
     MaxFrameSubmissionResult,
 )
+from dbt.adapters.maxcompute.python_udfs import (
+    MaxComputePythonUDFManager,
+    MaxComputePythonUDFSpec,
+)
 
 from dbt.adapters.maxcompute.relation_configs._partition import PartitionConfig
 from dbt.adapters.maxcompute.relation_configs._materialized_view import (
     MaxComputeMaterializedViewConfig,
 )
-from dbt.adapters.maxcompute.utils import is_schema_not_found, quote_string, quote_ref
+from dbt.adapters.maxcompute.utils import (
+    is_schema_not_found,
+    quote_string,
+    quote_ref,
+    retry_on_transport_error,
+)
 
 logger = AdapterLogger("MaxCompute")
 
@@ -99,6 +108,55 @@ class MaxComputeAdapter(SQLAdapter):
         conn = self.acquire_connection()
         return conn.handle.odps
 
+    @staticmethod
+    def _python_udf_config_values(value: Any, field_name: str) -> Tuple[str, ...]:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)):
+            raise DbtRuntimeError(f"MaxCompute Python UDF config {field_name!r} must be a list")
+        return tuple(str(item) for item in value)
+
+    @available
+    def create_or_update_python_udf(
+        self,
+        relation: MaxComputeRelation,
+        compiled_code: str,
+        argument_types: List[str],
+        return_type: str,
+        entry_point: str,
+        runtime_version: str,
+        function_type: str,
+        packages: Optional[List[str]] = None,
+        resources: Optional[List[str]] = None,
+        python_libraries: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        spec = MaxComputePythonUDFSpec(
+            function_name=relation.identifier,
+            project=relation.database,
+            schema=relation.schema,
+            compiled_code=compiled_code,
+            argument_types=self._python_udf_config_values(argument_types, "argument_types"),
+            return_type=return_type,
+            entry_point=entry_point,
+            runtime_version=runtime_version,
+            function_type=function_type,
+            packages=self._python_udf_config_values(packages, "packages"),
+            resources=self._python_udf_config_values(resources, "resources"),
+            python_libraries=self._python_udf_config_values(python_libraries, "python_libraries"),
+        )
+        result = MaxComputePythonUDFManager(self.get_odps_client(), logger=logger).deploy(spec)
+        if result["runtime_version"] == "cp37":
+            logger.warning(
+                "MaxCompute Python UDF was declared for legacy cp37. Function "
+                "runtime selection is session-scoped, so SQL that calls it must "
+                "override odps.sql.python.version=cp37."
+            )
+        logger.info(
+            f"MaxCompute Python UDF {relation.render()} {result['action']} "
+            f"with signature {result['signature']} on {result['runtime_version']}"
+        )
+        return result
+
     @property
     def default_python_submission_method(self) -> str:
         configured_method = getattr(
@@ -110,9 +168,7 @@ class MaxComputeAdapter(SQLAdapter):
     def python_submission_helpers(self) -> Dict[str, Type[PythonJobHelper]]:
         return {"maxframe": MaxFramePythonJobHelper}
 
-    def generate_python_submission_response(
-        self, submission_result: Any
-    ) -> AdapterResponse:
+    def generate_python_submission_response(self, submission_result: Any) -> AdapterResponse:
         if isinstance(submission_result, MaxFrameSubmissionResult):
             # LogView URLs contain temporary access tokens, so expose the
             # stable session identifier without serializing the URL into dbt
@@ -221,7 +277,11 @@ class MaxComputeAdapter(SQLAdapter):
         if relation.table is None:
             return
         logger.debug(f"Dropping relation {relation.render()}")
-        if relation.is_view or relation.is_materialized_view:
+        if relation.is_function:
+            MaxComputePythonUDFManager(self.get_odps_client(), logger=logger).drop(
+                relation.identifier, relation.project, relation.schema
+            )
+        elif relation.is_view or relation.is_materialized_view:
             self.get_odps_client().delete_view(
                 relation.identifier, relation.project, True, relation.schema
             )
@@ -274,9 +334,25 @@ class MaxComputeAdapter(SQLAdapter):
 
         try:
             self.cache.drop_schema(relation.database, relation.schema)
-            for relation in self.list_relations_without_caching(relation):
-                self.drop_relation(relation)
-            self.get_odps_client().delete_schema(relation.schema, relation.database)
+            functions = list(
+                self.get_odps_client().list_functions(
+                    project=relation.database, schema=relation.schema
+                )
+            )
+            function_manager = MaxComputePythonUDFManager(self.get_odps_client(), logger=logger)
+            for function in functions:
+                retry_on_transport_error(
+                    lambda function=function: function_manager.drop(
+                        function.name, relation.database, relation.schema
+                    )
+                )
+            for child_relation in self.list_relations_without_caching(relation):
+                retry_on_transport_error(
+                    lambda child_relation=child_relation: self.drop_relation(child_relation)
+                )
+            retry_on_transport_error(
+                lambda: self.get_odps_client().delete_schema(relation.schema, relation.database)
+            )
         except ODPSError as e:
             if is_schema_not_found(e):
                 return

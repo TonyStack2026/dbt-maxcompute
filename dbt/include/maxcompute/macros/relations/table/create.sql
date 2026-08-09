@@ -58,7 +58,8 @@
     lifecycle=none,
     tblproperties=none,
     primary_keys=none,
-    is_transactional=false
+    is_transactional=false,
+    add_sentinel=false
 ) -%}
 import maxframe.dataframe as md
 from maxframe.dataframe.core import DATAFRAME_TYPE
@@ -73,38 +74,46 @@ def _dbt_maxframe_load_relation(relation_name):
     return md.read_odps_table(relation_name.replace("`", ""), odps_entry=odps_entry)
 
 dbt = dbtObj(_dbt_maxframe_load_relation)
-df = model(dbt, maxframe_session)
-
-if not isinstance(df, DATAFRAME_TYPE):
-    raise TypeError(
-        f"{type(df)} is not a supported type for dbt MaxFrame materialization; "
-        "model() must return a MaxFrame DataFrame"
-    )
-
 {% set _dbt_microbatch_event_time = config.get('event_time', none) %}
 {% set _dbt_microbatch_start = config.get('__dbt_internal_microbatch_event_time_start', none) %}
 {% set _dbt_microbatch_end = config.get('__dbt_internal_microbatch_event_time_end', none) %}
 {% if _dbt_microbatch_event_time and _dbt_microbatch_start and _dbt_microbatch_end %}
 import pandas as _dbt_pandas
 
-_dbt_maxframe_event_time_start = _dbt_pandas.Timestamp(
-    {{ _dbt_microbatch_start.isoformat() | tojson }}
-).tz_localize(None)
-_dbt_maxframe_event_time_end = _dbt_pandas.Timestamp(
-    {{ _dbt_microbatch_end.isoformat() | tojson }}
-).tz_localize(None)
-_dbt_maxframe_event_time_series = df[
-    {{ _dbt_microbatch_event_time | tojson }}
-].astype("datetime64[ns]")
-df = df[
-    (_dbt_maxframe_event_time_series >= _dbt_maxframe_event_time_start)
-    & (_dbt_maxframe_event_time_series < _dbt_maxframe_event_time_end)
-]
 {% endif %}
+
+def _dbt_maxframe_build_dataframe(session):
+    dataframe = model(dbt, session)
+    if not isinstance(dataframe, DATAFRAME_TYPE):
+        raise TypeError(
+            f"{type(dataframe)} is not a supported type for dbt MaxFrame materialization; "
+            "model() must return a MaxFrame DataFrame"
+        )
+{% if _dbt_microbatch_event_time and _dbt_microbatch_start and _dbt_microbatch_end %}
+    event_time_start = _dbt_pandas.Timestamp(
+        {{ _dbt_microbatch_start.isoformat() | tojson }}
+    ).tz_localize(None)
+    event_time_end = _dbt_pandas.Timestamp(
+        {{ _dbt_microbatch_end.isoformat() | tojson }}
+    ).tz_localize(None)
+    event_time_series = dataframe[
+        {{ _dbt_microbatch_event_time | tojson }}
+    ].astype("datetime64[ns]")
+    dataframe = dataframe[
+        (event_time_series >= event_time_start)
+        & (event_time_series < event_time_end)
+    ]
+{% endif %}
+    return dataframe
+
+df = _dbt_maxframe_build_dataframe(maxframe_session)
 
 _dbt_maxframe_table_properties = dict({{ tblproperties or {} }})
 {% if is_transactional %}
 _dbt_maxframe_table_properties["transactional"] = "true"
+{% endif %}
+{% if add_sentinel %}
+df = _dbt_maxframe_with_sentinel(df, _dbt_maxframe_target_relation)
 {% endif %}
 
 _dbt_maxframe_sink = md.to_odps_table(
@@ -126,6 +135,29 @@ _dbt_maxframe_sink = md.to_odps_table(
     {%- endif %}
 )
 _dbt_maxframe_execute(_dbt_maxframe_sink)
+{%- endmacro %}
+
+
+{% macro maxframe_select_without_sentinel(stage_relation) -%}
+    {%- set sentinel_column = '__dbt_maxframe_sentinel' -%}
+    {%- set stage_columns = adapter.get_columns_in_relation(stage_relation) -%}
+    {%- set data_columns = [] -%}
+    {%- set found_sentinel = namespace(value=false) -%}
+    {%- for column in stage_columns -%}
+        {%- if column.name | lower == sentinel_column -%}
+            {%- set found_sentinel.value = true -%}
+        {%- else -%}
+            {%- do data_columns.append(adapter.quote(column.name)) -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {%- if not found_sentinel.value -%}
+        {% do exceptions.raise_compiler_error(
+            "MaxFrame staging relation is missing the internal sentinel column"
+        ) %}
+    {%- endif -%}
+    select {{ data_columns | join(', ') }}
+    from {{ stage_relation }}
+    where {{ adapter.quote(sentinel_column) }} = false
 {%- endmacro %}
 
 

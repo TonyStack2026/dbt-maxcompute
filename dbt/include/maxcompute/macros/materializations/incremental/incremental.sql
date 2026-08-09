@@ -80,17 +80,55 @@
 
   {% if existing_relation is none %}
     {% if language == 'python' %}
-      {% if partition_by is not none and partition_by.auto_partition() %}
-        {% set stage_relation = make_temp_relation(target_relation, '__dbt_maxframe_stage') %}
+      {% set stage_suffix = '__dbt_mf_' ~ (invocation_id | replace('-', ''))[:8] %}
+      {% set stage_relation = make_temp_relation(target_relation, stage_suffix) %}
+      {{ drop_relation_if_exists(load_relation(stage_relation)) }}
+      {% call statement('main', language='python') -%}
+{{ maxframe_write_table(
+    compiled_code,
+    stage_relation,
+    lifecycle=1,
+    add_sentinel=true
+).lstrip() }}
+      {%- endcall %}
+      {% call statement('create_maxframe_relation', language='sql') -%}
+        {{ create_table_as_internal(
+            false,
+            target_relation,
+            maxframe_select_without_sentinel(stage_relation),
+            is_transactional,
+            primary_keys,
+            config.get('delta_table_bucket_num', 16),
+            partition_by,
+            lifecycle,
+            tblproperties
+        ) }}
+      {%- endcall %}
+      {{ adapter.drop_relation(stage_relation) }}
+    {% else %}
+      {%- call statement('main') -%}
+        {{ create_table_as_internal(False, target_relation, sql, True, partition_config=partition_by, lifecycle=lifecycle, tblproperties=tblproperties) }}
+      {%- endcall -%}
+    {% endif %}
+  {% elif full_refresh_mode %}
+      {% do log("Hard refreshing " ~ existing_relation) %}
+      {% if language == 'python' %}
+        {% set stage_suffix = '__dbt_mf_' ~ (invocation_id | replace('-', ''))[:8] %}
+        {% set stage_relation = make_temp_relation(intermediate_relation, stage_suffix) %}
         {{ drop_relation_if_exists(load_relation(stage_relation)) }}
         {% call statement('main', language='python') -%}
-{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
+{{ maxframe_write_table(
+    compiled_code,
+    stage_relation,
+    lifecycle=1,
+    add_sentinel=true
+).lstrip() }}
         {%- endcall %}
-        {% call statement('create_auto_partition_relation', language='sql') -%}
+        {% call statement('create_maxframe_relation', language='sql') -%}
           {{ create_table_as_internal(
               false,
-              target_relation,
-              'select * from ' ~ stage_relation,
+              intermediate_relation,
+              maxframe_select_without_sentinel(stage_relation),
               is_transactional,
               primary_keys,
               config.get('delta_table_bucket_num', 16),
@@ -100,60 +138,6 @@
           ) }}
         {%- endcall %}
         {{ adapter.drop_relation(stage_relation) }}
-      {% else %}
-        {% call statement('main', language='python') -%}
-{{ maxframe_write_table(
-    compiled_code,
-    target_relation,
-    partition_config=partition_by,
-    lifecycle=lifecycle,
-    tblproperties=tblproperties,
-    primary_keys=primary_keys,
-    is_transactional=is_transactional
-).lstrip() }}
-        {%- endcall %}
-      {% endif %}
-    {% else %}
-      {%- call statement('main') -%}
-        {{ create_table_as_internal(False, target_relation, sql, True, partition_config=partition_by, lifecycle=lifecycle, tblproperties=tblproperties) }}
-      {%- endcall -%}
-    {% endif %}
-  {% elif full_refresh_mode %}
-      {% do log("Hard refreshing " ~ existing_relation) %}
-      {% if language == 'python' %}
-        {% if partition_by is not none and partition_by.auto_partition() %}
-          {% set stage_relation = make_temp_relation(intermediate_relation, '__dbt_maxframe_stage') %}
-          {{ drop_relation_if_exists(load_relation(stage_relation)) }}
-          {% call statement('main', language='python') -%}
-{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
-          {%- endcall %}
-          {% call statement('create_auto_partition_relation', language='sql') -%}
-            {{ create_table_as_internal(
-                false,
-                intermediate_relation,
-                'select * from ' ~ stage_relation,
-                is_transactional,
-                primary_keys,
-                config.get('delta_table_bucket_num', 16),
-                partition_by,
-                lifecycle,
-                tblproperties
-            ) }}
-          {%- endcall %}
-          {{ adapter.drop_relation(stage_relation) }}
-        {% else %}
-          {% call statement('main', language='python') -%}
-{{ maxframe_write_table(
-    compiled_code,
-    intermediate_relation,
-    partition_config=partition_by,
-    lifecycle=lifecycle,
-    tblproperties=tblproperties,
-    primary_keys=primary_keys,
-    is_transactional=is_transactional
-).lstrip() }}
-          {%- endcall %}
-        {% endif %}
         {% set existing_relation = load_cached_relation(existing_relation) %}
         {% if existing_relation is not none %}
           {{ adapter.rename_relation(existing_relation, backup_relation) }}
@@ -172,39 +156,33 @@
       {#-- Check first, since otherwise we may not build a temp table --#}
       {#-- Python always needs to create a temp table --#}
       {% if language == 'python' %}
-        {% if partition_by is not none and partition_by.auto_partition() %}
-          {% set stage_relation = make_temp_relation(temp_relation, '__dbt_maxframe_stage') %}
-          {{ drop_relation_if_exists(load_relation(stage_relation)) }}
-          {% call statement('create_temp_relation_maxframe_stage', language='python') -%}
-{{ maxframe_write_table(compiled_code, stage_relation, lifecycle=1).lstrip() }}
-          {%- endcall %}
-          {% call statement('create_temp_relation', language='sql') -%}
-            {{ create_table_as_internal(
-                true,
-                temp_relation,
-                'select * from ' ~ stage_relation,
-                is_transactional,
-                primary_keys,
-                config.get('delta_table_bucket_num', 16),
-                partition_by,
-                1,
-                tblproperties
-            ) }}
-          {%- endcall %}
-          {{ adapter.drop_relation(stage_relation) }}
-        {% else %}
-          {% call statement('create_temp_relation', language='python') -%}
+        {#-- Use a short per-invocation name. Reusing a just-dropped stage can --#}
+        {#-- hit stale MaxFrame / MaxCompute metadata on the next dbt run.    --#}
+        {% set stage_suffix = '__dbt_mf_' ~ (invocation_id | replace('-', ''))[:8] %}
+        {% set stage_relation = make_temp_relation(target_relation, stage_suffix) %}
+        {{ drop_relation_if_exists(load_relation(stage_relation)) }}
+        {% call statement('create_temp_relation_maxframe_stage', language='python') -%}
 {{ maxframe_write_table(
     compiled_code,
-    temp_relation,
-    partition_config=partition_by,
+    stage_relation,
     lifecycle=1,
-    tblproperties=tblproperties,
-    primary_keys=primary_keys,
-    is_transactional=is_transactional
+    add_sentinel=true
 ).lstrip() }}
-          {%- endcall %}
-        {% endif %}
+        {%- endcall %}
+        {% call statement('create_temp_relation', language='sql') -%}
+          {{ create_table_as_internal(
+              true,
+              temp_relation,
+              maxframe_select_without_sentinel(stage_relation),
+              is_transactional,
+              primary_keys,
+              config.get('delta_table_bucket_num', 16),
+              partition_by,
+              1,
+              tblproperties
+          ) }}
+        {%- endcall %}
+        {{ adapter.drop_relation(stage_relation) }}
       {% else %}
         {%- call statement('create_temp_relation') -%}
           {{ create_table_as_internal(True, temp_relation, sql, True, partition_config=partition_by, tblproperties=tblproperties) }}

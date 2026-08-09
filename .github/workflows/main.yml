@@ -56,11 +56,14 @@ jobs:
         run: |
           python -m pip install --user --upgrade pip
           python -m pip install -r dev-requirements.txt
+          python -m pip install -e .
           python -m pip --version
           pre-commit --version
           dbt --version
       - name: Run pre-commit hooks
         run: pre-commit run --all-files --show-diff-on-failure
+      - name: Run unit tests
+        run: pytest tests/unit tests/unit_test -q
 
   build:
     name: build packages

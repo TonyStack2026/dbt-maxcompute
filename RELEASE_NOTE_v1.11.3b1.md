@@ -1,0 +1,45 @@
+# dbt-maxcompute v1.11.3b1 Release Notes
+
+**Release Date:** 2026-08-09
+
+This Beta release introduces MaxFrame Python models as Production Preview and
+dbt Python function resources as Beta. It is intended for white-tower and
+controlled-project validation before a stable release.
+
+## MaxFrame Python Models — Production Preview
+
+- table and incremental Python models backed by MaxFrame DataFrames;
+- `ref`, `source`, `config`, `this`, and `is_incremental` integration;
+- regular and automatic MaxCompute partitions;
+- `merge`, `append`, `delete+insert`, `insert_overwrite`, and `microbatch`;
+- failure-safe, empty-output-safe staging; bounded transport retries; and
+  session observability.
+
+Install the optional runtime with:
+
+```bash
+pip install "dbt-maxcompute[maxframe]==1.11.3b1"
+```
+
+## Python UDFs — Beta
+
+- persistent scalar and aggregate Python functions through dbt `functions:`;
+- MaxCompute CPython 3.11 (`cp311`) by default;
+- generated MaxCompute handlers and signatures;
+- content-addressed resources, safe updates, and managed cleanup;
+- existing MaxCompute resources and compatible archive dependencies.
+
+## Compatibility notice
+
+SQL submitted through dbt now defaults to `odps.sql.python.version=cp311`.
+Projects that call legacy CPython 3.7 UDFs must override that SQL session hint
+to `cp37` on the relevant execution path.
+
+## Maturity and known limitations
+
+- MaxFrame cancellation is not yet propagated to an active remote DAG.
+- MaxFrame model-level packages are not dynamically installed.
+- Python functions do not yet support SQL UDFs, UDTFs, overloads, grants,
+  default arguments, or dynamic PyPI installation.
+- Review `docs/maxframe-python-models.md` and `docs/python-udfs.md` before using
+  these capabilities in production.
