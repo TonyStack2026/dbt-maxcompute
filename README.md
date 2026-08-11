@@ -215,7 +215,9 @@ an existing target is not replaced until the MaxFrame job succeeds.
 
 See the [MaxFrame Python Models guide](docs/maxframe-python-models.md) for the
 complete installation, partitioning, incremental, operations, and migration
-reference.
+reference. Run the
+[production readiness checklist](docs/maxframe-production-readiness.md) before
+promoting a project workload.
 
 ```python
 def model(dbt, session):

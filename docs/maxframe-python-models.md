@@ -3,6 +3,10 @@
 > **Status: Production Preview (`1.11.3b1`).** Suitable for selected production
 > workloads after reviewing the limitations and operational guidance below.
 
+Release owners should also run the
+[production readiness gates](maxframe-production-readiness.md) against their
+own quota, runtime image, dependencies, and data volume.
+
 `dbt-maxcompute` can execute dbt Python models as MaxFrame DataFrame jobs and
 materialize their results as MaxCompute tables.
 
