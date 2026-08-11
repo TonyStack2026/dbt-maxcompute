@@ -1,6 +1,6 @@
 # dbt-maxcompute v1.11.3b1 Release Notes
 
-**Release Date:** 2026-08-09
+**Release Date:** 2026-08-11
 
 This Beta release introduces MaxFrame Python models as Production Preview and
 dbt Python function resources as Beta. It is intended for white-tower and
@@ -13,13 +13,24 @@ controlled-project validation before a stable release.
 - regular and automatic MaxCompute partitions;
 - `merge`, `append`, `delete+insert`, `insert_overwrite`, and `microbatch`;
 - failure-safe, empty-output-safe staging; bounded transport retries; and
-  session observability.
+  session observability;
+- partition-column visibility in downstream MaxFrame `ref` and `source`;
+- production PythonPack cache by default and managed-image guidance for large
+  scientific dependencies;
+- exact session-scoped cleanup after normal, failed, and retried runs;
+- configurable Python 3.11 custom-function compatibility checks without
+  restricting package installation on other supported Python versions.
 
 Install the optional runtime with:
 
 ```bash
 pip install "dbt-maxcompute[maxframe]==1.11.3b1"
 ```
+
+Start with the
+[MaxFrame Python user guide](docs/maxframe-python-user-guide.md), then review
+the [production readiness checklist](docs/maxframe-production-readiness.md)
+before promoting a workload.
 
 ## Python UDFs — Beta
 

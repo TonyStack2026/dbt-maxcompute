@@ -213,9 +213,10 @@ Python models can use MaxFrame DataFrames with the standard dbt `ref`, `source`,
 writes to a dbt intermediate table, and then uses the normal table swap flow so
 an existing target is not replaced until the MaxFrame job succeeds.
 
-See the [MaxFrame Python Models guide](docs/maxframe-python-models.md) for the
-complete installation, partitioning, incremental, operations, and migration
-reference. Run the
+Start with the [MaxFrame Python user guide](docs/maxframe-python-user-guide.md),
+then use the [MaxFrame Python Models reference](docs/maxframe-python-models.md)
+for complete installation, partitioning, incremental, operations, and
+migration details. Run the
 [production readiness checklist](docs/maxframe-production-readiness.md) before
 promoting a project workload.
 
