@@ -1,4 +1,4 @@
-# dbt-maxcompute v1.11.3b1 Release Notes
+# dbt-maxcompute v1.11.3b2 Release Notes
 
 **Release Date:** 2026-08-11
 
@@ -24,7 +24,7 @@ controlled-project validation before a stable release.
 Install the optional runtime with:
 
 ```bash
-pip install "dbt-maxcompute[maxframe]==1.11.3b1"
+pip install "dbt-maxcompute[maxframe]==1.11.3b2"
 ```
 
 Start with the

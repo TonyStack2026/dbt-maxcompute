@@ -1,6 +1,6 @@
 # MaxFrame Python Models
 
-> **Status: Production Preview (`1.11.3b1`).** Suitable for selected production
+> **Status: Production Preview (`1.11.3b2`).** Suitable for selected production
 > workloads after reviewing the limitations and operational guidance below.
 
 Release owners should also run the

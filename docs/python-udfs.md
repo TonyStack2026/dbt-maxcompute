@@ -1,6 +1,6 @@
 # Python UDFs
 
-> **Status: Beta (`1.11.3b1`).** Suitable for evaluation and controlled
+> **Status: Beta (`1.11.3b2`).** Suitable for evaluation and controlled
 > workloads. Runtime dependency conventions may change before GA.
 
 `dbt-maxcompute` can build persistent MaxCompute Python functions from dbt

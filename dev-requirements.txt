@@ -2,3 +2,4 @@
 git+https://github.com/dbt-labs/dbt-adapters.git#subdirectory=dbt-tests-adapter
 
 pytest
+pre-commit==3.7.1
