@@ -14,6 +14,7 @@ mis-routes rows. The append path needs its own override that emits
 `INSERT INTO <tgt> PARTITION(<pt>) SELECT <data_cols>, <pt> FROM <src>`
 when the target is non-auto partitioned.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -71,8 +72,6 @@ class TestIncrementalAppendNonAutoPartition:
         run_dbt(["run"])
         # Second run: incremental branch appends rows 3,4,5 again
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         # append doesn't dedupe → 1,2,3,3,4,4,5,5
         assert sorted(r[0] for r in rows) == [1, 2, 3, 3, 4, 4, 5, 5]

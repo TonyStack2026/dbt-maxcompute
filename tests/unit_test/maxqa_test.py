@@ -150,7 +150,9 @@ class TestExecuteMaxQA(unittest.TestCase):
         )
 
     def test_calls_with_fallback_and_offline_quota(self):
-        config = MaxQAConfig(quota_name="interactive_q", fallback=True, offline_quota_name="batch_q")
+        config = MaxQAConfig(
+            quota_name="interactive_q", fallback=True, offline_quota_name="batch_q"
+        )
         cursor, mock_odps = _make_cursor(maxqa_config=config)
         result = ParseResult(settings={}, remaining_query="INSERT INTO t SELECT 1", errors=[])
         cursor._execute_maxqa(result, config)
@@ -180,9 +182,11 @@ class TestExecuteRouting(unittest.TestCase):
         with patch.object(CursorWrapper, "_execute_maxqa") as mock_maxqa:
             with patch("odps.dbapi.Cursor.execute") as mock_super_execute:
                 cursor._instance = mock_instance
+
                 # Patch super().execute to set _instance
                 def side_effect(*a, **kw):
                     cursor._instance = mock_instance
+
                 mock_super_execute.side_effect = side_effect
 
                 cursor.execute("SELECT 1")
@@ -217,8 +221,10 @@ class TestExecuteRouting(unittest.TestCase):
         mock_instance.id = "test_id"
 
         with patch("odps.dbapi.Cursor.execute") as mock_super_execute:
+
             def side_effect(*a, **kw):
                 cursor._instance = mock_instance
+
             mock_super_execute.side_effect = side_effect
 
             cursor.execute("SET dbt.execution_mode=offline;\nSELECT 1")

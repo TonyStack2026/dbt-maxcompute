@@ -7,6 +7,7 @@ is missing) and the guard itself is wrong — MaxCompute fully supports
 multi-column dynamic partition for INSERT OVERWRITE. This test pins
 that compose case end-to-end.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -58,12 +59,7 @@ class TestInsertOverwriteMultiPartition:
         run_dbt(["run"])
         # Insert a new row landing in a new k1,k2 partition; dynamic
         # insert_overwrite must touch only the partitions present in source.
-        project.run_sql(
-            "insert into {schema}.io_multi_part_src "
-            "values (4,'d','p3','q1')"
-        )
+        project.run_sql("insert into {schema}.io_multi_part_src " "values (4,'d','p3','q1')")
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4]

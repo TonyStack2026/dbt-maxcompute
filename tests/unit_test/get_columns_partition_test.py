@@ -15,6 +15,7 @@ trip, so the test exercises the filter logic directly against a
 hand-built schema. The adapter method then trivially wraps the same
 filter.
 """
+
 import unittest
 
 from odps.models.table import TableSchema
@@ -63,21 +64,15 @@ class TestGetColumnsPartitionFilter(unittest.TestCase):
             ["string"],
         )
         # Simulate the server marking the partition column as auto-generated.
-        schema._partitions[0]._generate_expression = (
-            'trunc_time(`event_time`, "month")'
-        )
+        schema._partitions[0]._generate_expression = 'trunc_time(`event_time`, "month")'
         self.assertEqual(
             _filter_partition_cols_like_adapter(schema),
             ["id", "event_time"],
         )
 
     def test_unpartitioned_table_unaffected(self):
-        schema = TableSchema.from_lists(
-            ["id", "value"], ["bigint", "double"]
-        )
-        self.assertEqual(
-            _filter_partition_cols_like_adapter(schema), ["id", "value"]
-        )
+        schema = TableSchema.from_lists(["id", "value"], ["bigint", "double"])
+        self.assertEqual(_filter_partition_cols_like_adapter(schema), ["id", "value"])
 
 
 if __name__ == "__main__":

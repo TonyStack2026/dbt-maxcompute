@@ -8,6 +8,7 @@ of the md5('') that the macro intends.
 dbt-core's BaseHash fixture only tests non-NULL inputs, so this case has to
 live in our own suite.
 """
+
 import hashlib
 
 import pytest
@@ -38,9 +39,7 @@ class TestHashNullInput:
 
     def test_hash_handles_null(self, project):
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id, hashed from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id, hashed from {schema}.model order by id", fetch="all")
         by_id = {r[0]: r[1] for r in rows}
 
         assert by_id[1] == hashlib.md5(b"hello").hexdigest()

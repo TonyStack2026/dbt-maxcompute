@@ -9,6 +9,7 @@ cleanup `if temp_relation_exists -> drop_relation(temp_relation)` never
 fires and `<model>__dbt_tmp` leaks in the project schema after every
 incremental run.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -41,9 +42,7 @@ class TestIncrementalTempCleanup:
 
         leaked = True
         try:
-            project.run_sql(
-                "select count(*) from {schema}.leak_model__dbt_tmp", fetch="one"
-            )
+            project.run_sql("select count(*) from {schema}.leak_model__dbt_tmp", fetch="one")
         except Exception:
             leaked = False
         assert not leaked, "leak_model__dbt_tmp survived incremental run"

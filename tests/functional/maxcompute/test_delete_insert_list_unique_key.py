@@ -14,6 +14,7 @@ as `where (k1, k2) in (select k1, k2 from src)`.
 No existing test in dbt-maxcompute exercises delete+insert with a list
 unique_key, so the bug stayed hidden.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -50,7 +51,5 @@ class TestDeleteInsertListUniqueKey:
         # Second run goes through the delete+insert path that emits the
         # multi-column DELETE — this is what fails today.
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select a from {schema}.model order by a", fetch="all"
-        )
+        rows = project.run_sql("select a from {schema}.model order by a", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4]

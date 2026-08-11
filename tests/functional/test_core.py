@@ -83,7 +83,7 @@ where id <= 3
 class TestTableMaterialization:
     """
     测试物理表物化策略
-    
+
     场景: 创建一个简单的物理表，验证创建和幂等性
     """
 
@@ -159,7 +159,7 @@ where id > 2
 class TestViewMaterialization:
     """
     测试视图物化策略
-    
+
     场景: 创建一个视图，验证视图查询正确性和幂等性
     """
 
@@ -252,8 +252,8 @@ where id > (select max(id) from {{ this }})
 class TestIncrementalMaterialization:
     """
     测试增量物化策略 - append 追加模式
-    
-    场景: 
+
+    场景:
     - 首次运行加载全量数据
     - 后续运行只追加新增数据（基于 id > max(id) 条件）
     """
@@ -393,12 +393,12 @@ sources:
 class TestIncrementalPartition:
     """
     测试分区表增量物化 - insert_overwrite 策略
-    
-    场景: 
+
+    场景:
     - 源表按日期分区
     - 目标表增量加载，只处理新分区
     - 历史分区数据不变
-    
+
     这是最常见的 ETL 模式：每日增量分区加载
     """
 
@@ -490,7 +490,7 @@ class TestIncrementalPartition:
 #   3. dbt run (增量): 幂等性验证
 #
 # 结果表:
-#   - fact_auto_partition_day: 
+#   - fact_auto_partition_day:
 #     - 按天粒度自动分区
 #     - 3 个分区: 20240101, 20240102, 20240103
 #     - 8 行数据
@@ -592,8 +592,8 @@ sources:
 class TestIncrementalAutoPartition:
     """
     测试自动分区表增量物化 - insert_overwrite 策略
-    
-    场景: 
+
+    场景:
     - 时间戳列自动转换为分区
     - 支持不同粒度: day/month/hour
     - 适用于时间序列数据的自动分区管理
@@ -631,15 +631,11 @@ class TestIncrementalAutoPartition:
         assert relation is not None
 
         # Check row count for day partitioned table
-        result = project.run_sql(
-            "select count(*) from fact_auto_partition_day", fetch="one"
-        )
+        result = project.run_sql("select count(*) from fact_auto_partition_day", fetch="one")
         assert result[0] == 8
 
         # Check partitions for day granularity (should have 3 daily partitions)
-        partitions = project.run_sql(
-            "show partitions fact_auto_partition_day", fetch="all"
-        )
+        partitions = project.run_sql("show partitions fact_auto_partition_day", fetch="all")
         partition_text = partitions[0][0] if partitions else ""
         day_partition_count = len([p for p in partition_text.split("\n") if p.strip()])
         assert day_partition_count == 3
@@ -653,15 +649,11 @@ class TestIncrementalAutoPartition:
         assert relation is not None
 
         # Check row count for month partitioned table
-        result = project.run_sql(
-            "select count(*) from fact_auto_partition_month", fetch="one"
-        )
+        result = project.run_sql("select count(*) from fact_auto_partition_month", fetch="one")
         assert result[0] == 8
 
         # Check partitions for month granularity (should have 1 monthly partition)
-        partitions = project.run_sql(
-            "show partitions fact_auto_partition_month", fetch="all"
-        )
+        partitions = project.run_sql("show partitions fact_auto_partition_month", fetch="all")
         partition_text = partitions[0][0] if partitions else ""
         month_partition_count = len([p for p in partition_text.split("\n") if p.strip()])
         assert month_partition_count == 1
@@ -685,9 +677,7 @@ class TestIncrementalAutoPartition:
         run_dbt(["run"])
 
         # Verify unchanged
-        result_day = project.run_sql(
-            "select count(*) from fact_auto_partition_day", fetch="one"
-        )
+        result_day = project.run_sql("select count(*) from fact_auto_partition_day", fetch="one")
         result_month = project.run_sql(
             "select count(*) from fact_auto_partition_month", fetch="one"
         )
@@ -794,8 +784,8 @@ sources:
 class TestIncrementalPartitionFilter:
     """
     测试带分区过滤的增量物化 - insert_overwrite 策略
-    
-    场景: 
+
+    场景:
     - 通过 WHERE 条件控制增量运行处理的分区范围
     - 首次运行加载全量，后续运行只处理指定分区
     - 适用于分区级别的数据修复和回填
@@ -912,8 +902,8 @@ select * from {{ ref('sample') }}
 class TestIncrementalMerge:
     """
     测试增量物化 - merge 合并策略
-    
-    场景: 
+
+    场景:
     - 基于唯一键合并数据
     - 新记录插入，已存在记录更新
     - 实现 upsert 语义
@@ -997,8 +987,8 @@ select id, name, value from {{ source('raw', 'sample') }}
 class TestMaterializedView:
     """
     测试物化视图物化策略
-    
-    场景: 
+
+    场景:
     - 创建物化视图，存储预计算结果
     - 验证物化视图类型正确
     - 验证重新运行的幂等性
@@ -1222,8 +1212,8 @@ seeds:
 class TestSnapshot:
     """
     测试快照物化
-    
-    场景: 
+
+    场景:
     - 首次快照记录当前状态
     - 数据变更后快照记录新版本
     - 保留完整的历史版本
@@ -1255,7 +1245,9 @@ class TestSnapshot:
         run_dbt(["snapshot"])
 
         # Update a record (seed table is transactional, use explicit CAST)
-        project.run_sql("update sample set value = 999, updated_at = CAST('2024-02-01 00:00:00' AS TIMESTAMP) where id = 1")
+        project.run_sql(
+            "update sample set value = 999, updated_at = CAST('2024-02-01 00:00:00' AS TIMESTAMP) where id = 1"
+        )
 
         # Run snapshot again
         run_dbt(["snapshot"])
@@ -1265,9 +1257,7 @@ class TestSnapshot:
         assert result[0] == 4
 
         # Check that we have both versions of id=1
-        result = project.run_sql(
-            "select count(*) from my_snapshot where id = 1", fetch="one"
-        )
+        result = project.run_sql("select count(*) from my_snapshot where id = 1", fetch="one")
         assert result[0] == 2
 
 
@@ -1282,7 +1272,7 @@ class TestSnapshot:
 #
 # ETL 过程:
 #   1. dbt seed: 加载种子数据
-#   2. dbt run: 
+#   2. dbt run:
 #      - my_ephemeral (临时模型): 不创建实际表，只作为 CTE
 #      - using_ephemeral: 引用 my_ephemeral，将其 SQL 内联为 CTE
 #
@@ -1327,8 +1317,8 @@ select * from {{ ref('my_ephemeral') }}
 class TestEphemeralMaterialization:
     """
     测试临时物化 (Ephemeral / CTE)
-    
-    场景: 
+
+    场景:
     - 临时模型不创建物理表
     - 其 SQL 被内联到引用模型中
     - 验证 CTE 逻辑正确工作

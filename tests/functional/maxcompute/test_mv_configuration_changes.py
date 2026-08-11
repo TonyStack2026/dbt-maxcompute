@@ -25,6 +25,7 @@ PyODPS exposes `Table.creation_time`; REBUILD leaves it unchanged,
 DROP+CREATE bumps it. We use that as the witness: two runs with
 identical config must leave `creation_time` untouched.
 """
+
 import os
 import time
 import pytest
@@ -110,9 +111,7 @@ class TestMaterializedViewConfigurationChanges:
 
     def test_changed_config_is_applied(self, project):
         """Bumping lifecycle must take effect on next run (no --full-refresh)."""
-        model_path = os.path.join(
-            project.project_root, "models", "mv_model.sql"
-        )
+        model_path = os.path.join(project.project_root, "models", "mv_model.sql")
         with open(model_path, "w") as f:
             f.write(_model_v2)
         run_dbt(["run"])

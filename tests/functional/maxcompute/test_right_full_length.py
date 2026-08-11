@@ -10,6 +10,7 @@ Concretely, right('abc', 3) used to return 'ab'.
 dbt-core's BaseRight fixture (abcdef/3, fishtown/4, december/5, december/0)
 never exercises this boundary, so the regression slipped through.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -44,6 +45,4 @@ class TestRightFullLength:
             fetch="all",
         )
         for s, n, expected, actual in rows:
-            assert actual == expected, (
-                f"right({s!r}, {n}) == {actual!r}, expected {expected!r}"
-            )
+            assert actual == expected, f"right({s!r}, {n}) == {actual!r}, expected {expected!r}"

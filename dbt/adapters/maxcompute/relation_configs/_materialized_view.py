@@ -59,9 +59,7 @@ class MaxComputeMaterializedViewConfig(MaxComputeBaseRelationConfig):
             "lifecycle": table.lifecycle if table.lifecycle and table.lifecycle > 0 else None,
             "table_comment": table.comment or None,
             "disable_rewrite": not table.is_materialized_view_rewrite_enabled,
-            "partition_by": (
-                {"fields": ",".join(partition_fields)} if partition_fields else None
-            ),
+            "partition_by": ({"fields": ",".join(partition_fields)} if partition_fields else None),
         }
 
     @classmethod

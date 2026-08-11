@@ -9,6 +9,7 @@ the partition column for non-auto partitioned targets, triggering
 ODPS-0123031 "invalid dynamic partition value". These tests pin the
 correct behavior end-to-end.
 """
+
 import pytest
 
 from dbt.tests.util import run_dbt
@@ -81,9 +82,7 @@ class TestMergeNonAutoPartition:
         run_dbt(["seed"])
         # First run: full refresh creates partitioned table with rows 1-5
         run_dbt(["run"])
-        first = project.run_sql(
-            "select count(*) from {schema}.model", fetch="one"
-        )
+        first = project.run_sql("select count(*) from {schema}.model", fetch="one")
         assert first[0] == 5
 
         # Insert a new row outside the incremental window to verify only the
@@ -95,9 +94,7 @@ class TestMergeNonAutoPartition:
         # Second run: id>=3 → 3,4,5 update, 6 inserts (this is the path that
         # used to fail with ODPS-0123031)
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -142,9 +139,7 @@ class TestMergeAutoPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -195,9 +190,7 @@ class TestMergeAutoPartitionWithGenColName:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -242,9 +235,7 @@ class TestMergeMultiFieldPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -308,9 +299,7 @@ class TestMergeExcludeColumnsWithPartition:
         # merge_exclude_columns=['name'] must keep the target's original
         # "Carol" intact while still inserting id=6 into a partitioned target.
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id, name from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id, name from {schema}.model order by id", fetch="all")
         names = {r[0]: r[1] for r in rows}
         assert names[3] == "Carol"
         assert names[6] == "Frank"
@@ -359,9 +348,7 @@ class TestMergeUpdateColumnsWithPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -408,9 +395,7 @@ class TestDeleteInsertNonAutoPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -458,9 +443,7 @@ class TestDeleteInsertAutoPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
 
 
@@ -508,9 +491,7 @@ class TestInsertOverwriteDynamicPartition:
             "values (6,'Frank',TIMESTAMP'2024-10-06 00:00:00','p06')"
         )
         run_dbt(["run"])
-        rows = project.run_sql(
-            "select id from {schema}.model order by id", fetch="all"
-        )
+        rows = project.run_sql("select id from {schema}.model order by id", fetch="all")
         # dynamic insert_overwrite replaces partitions present in source;
         # rows 1,2 stay (their partitions weren't touched), 3-5 are replaced
         # in their own partitions, 6 is new
