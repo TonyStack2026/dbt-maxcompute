@@ -18,9 +18,13 @@ your model serializes custom Python functions to MaxCompute workers.
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install --pre "dbt-maxcompute[maxframe]==1.11.3b2"
+python -m pip install "dbt-maxcompute[maxframe]==1.11.3b2"
 python -m dbt --version
 ```
+
+Keep the exact version pin and do not add pip's global `--pre` flag. The exact
+pin selects this preview while allowing the resolver to keep stable releases
+of dbt Core and other dependencies.
 
 The adapter does not restrict MaxFrame installation to Python 3.11. Other
 adapter-supported Python versions can run built-in MaxFrame DataFrame
