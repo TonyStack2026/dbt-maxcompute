@@ -27,8 +27,8 @@ Install the optional runtime with:
 pip install "dbt-maxcompute[maxframe]==1.11.3b2"
 ```
 
-The exact pin installs the preview without enabling prerelease versions of
-dbt Core or other dependencies. Do not add pip's global `--pre` flag.
+The exact pin installs the preview without globally enabling prerelease
+dependency resolution. Do not add pip's global `--pre` flag.
 
 Start with the
 [MaxFrame Python user guide](docs/maxframe-python-user-guide.md), then review

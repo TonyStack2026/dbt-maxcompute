@@ -23,8 +23,8 @@ python -m dbt --version
 ```
 
 Keep the exact version pin and do not add pip's global `--pre` flag. The exact
-pin selects this preview while allowing the resolver to keep stable releases
-of dbt Core and other dependencies.
+pin selects this preview without globally opting its dependencies into
+prerelease resolution.
 
 The adapter does not restrict MaxFrame installation to Python 3.11. Other
 adapter-supported Python versions can run built-in MaxFrame DataFrame
