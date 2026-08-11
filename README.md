@@ -49,8 +49,8 @@ latest stable release.
 ### Install the plugin
 
 ```bash
-# we use conda and python 3.10 for this example
-conda create --name dbt-maxcompute-example python=3.10
+# Python 3.11 is a reproducible baseline for MaxFrame custom-UDF workloads.
+conda create --name dbt-maxcompute-example python=3.11
 conda activate dbt-maxcompute-example
 
 pip install dbt-core
@@ -102,6 +102,8 @@ Currently we support the following parameters：
 | `submission_method` | Default Python model submission method. The supported value is `maxframe`. | `maxframe` |
 | `maxframe_quota_name` | Optional quota used by MaxFrame sessions. | Project default |
 | `maxframe_retries` | Number of new-session retries for transient MaxFrame DAG transport failures. | `2` |
+| `maxframe_python_version_check` | Custom-UDF CP311 compatibility policy: `warn`, `error`, or `off`. It does not affect installation. | `warn` |
+| `maxframe_pythonpack_production` | Reuse successful PythonPack builds from MaxFrame's production cache. | `true` |
 | Other auth options  | Alternative authentication methods such as STS. See [Authentication Configuration](docs/authentication.md). | **Varies by auth type**               |
 
 > **Note**: Fields marked with "Required" must be explicitly specified in your configuration.
@@ -283,8 +285,11 @@ intermediate relation and swap it only after the MaxFrame DAG succeeds. Failed
 DAG output relations are removed with bounded retries. Automatic-partition
 staging tables use lifecycle `1` and are cleaned before reuse and after a
 successful run. Transient DAG transport errors are retried in a new MaxFrame
-session (`maxframe_retries`, default `2`) without rebuilding the user's Python
-model graph.
+session (`maxframe_retries`, default `2`). The compiled Python model is
+re-executed against the new session after its failed staging relation is
+cleaned. Successful remote dependency builds use MaxFrame's production
+PythonPack cache by default; set `maxframe_pythonpack_production: false` only
+when short-lived dependency builds should not be retained.
 
 Current intentional differences from dbt-bigquery Python models:
 

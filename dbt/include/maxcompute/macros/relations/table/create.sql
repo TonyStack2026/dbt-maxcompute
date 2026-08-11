@@ -71,7 +71,17 @@ _dbt_maxframe_target_relation = {{ (target_relation.without_quote() | string) | 
 def _dbt_maxframe_load_relation(relation_name):
     # dbt renders MaxCompute relations with backticks, while PyODPS expects
     # unquoted project.schema.table components.
-    return md.read_odps_table(relation_name.replace("`", ""), odps_entry=odps_entry)
+    # Partition values are part of a dbt relation's row shape. MaxFrame omits
+    # them by default, which makes a downstream Python model unable to group,
+    # filter, or join on a partition produced by an upstream model.
+    unquoted_relation = relation_name.replace("`", "")
+    relation_table = odps_entry.get_table(unquoted_relation)
+    relation_table.reload()
+    return md.read_odps_table(
+        relation_table,
+        odps_entry=odps_entry,
+        append_partitions=bool(relation_table.table_schema.partitions),
+    )
 
 dbt = dbtObj(_dbt_maxframe_load_relation)
 {% set _dbt_microbatch_event_time = config.get('event_time', none) %}

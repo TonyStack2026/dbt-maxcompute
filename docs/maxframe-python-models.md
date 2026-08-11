@@ -33,7 +33,7 @@ results.
 
 ## Prerequisites
 
-- Python 3.10 or later;
+- a Python version supported by the installed dbt Core and MaxFrame SDK;
 - dbt Core 1.11.2 or later;
 - a MaxCompute project and credentials that can create, alter, read, write,
   and delete tables in the target schema.
@@ -45,6 +45,20 @@ pip install "dbt-maxcompute[maxframe]"
 ```
 
 The MaxFrame extra currently installs `maxframe>=2.7.1,<3.0.0`.
+
+Check the interpreter before running a Python model:
+
+```bash
+python --version
+python -m dbt --version
+```
+
+The adapter does not restrict MaxFrame installation or submission to Python
+3.11. Python 3.11 is recommended for models that serialize custom functions
+through `DataFrame.apply`, `Series.apply`, or `with_python_requirements`,
+because the default MaxCompute execution image uses CPython 3.11. A different
+client minor version can work for built-in DataFrame operations but may be
+incompatible when Python functions are serialized into the remote worker.
 
 ## Profile configuration
 
@@ -67,6 +81,8 @@ my_maxcompute_project:
       submission_method: maxframe
       maxframe_quota_name: my_maxframe_quota
       maxframe_retries: 2
+      maxframe_python_version_check: warn
+      maxframe_pythonpack_production: true
       timezone: Asia/Shanghai
 ```
 
@@ -76,7 +92,18 @@ RAM roles, OIDC, or another supported credential provider.
 `submission_method: maxframe` is optional because MaxFrame is the default
 Python submission method. `maxframe_retries: 2` means the adapter may create
 up to two retry sessions after the initial session when waiting for a DAG fails
-with a transport error.
+with a transport error. `maxframe_pythonpack_production: true` keeps successful
+PythonPack dependency builds in MaxFrame's production cache for reuse by
+periodic jobs. A UDF can still request a rebuild with
+`with_python_requirements(..., force_rebuild=True)`.
+
+`maxframe_python_version_check` controls only the compatibility notice for
+custom-function serialization. `warn` (the default) logs once per dbt process
+and continues; `error` is an opt-in strict policy for controlled production
+targets; `off` suppresses the check. It never changes package installation.
+Setting `maxframe_pythonpack_production: false` explicitly forwards the
+non-production PythonPack mode, so it also overrides a process-level MaxFrame
+option inherited by the dbt invocation.
 
 ## Your first MaxFrame model
 
@@ -132,6 +159,11 @@ def model(dbt, session):
 
 Dependencies are still recorded in the dbt DAG. `dbt run --select +my_model`
 therefore builds upstream dbt models before the MaxFrame model.
+
+For a partitioned ref or source, MaxFrame exposes partition columns in the
+returned DataFrame. They can be filtered, joined, grouped, and selected like
+regular columns even though MaxCompute stores them separately from data
+columns.
 
 ## Partitioned tables
 
@@ -354,6 +386,8 @@ do not run inside the MaxFrame model DAG.
 | `submission_method` | profile or model | `maxframe` | Python job backend. |
 | `maxframe_quota_name` | profile or model | project default | MaxFrame session quota. Model value wins. |
 | `maxframe_retries` | profile or model | `2` | New-session retries after a DAG transport failure. |
+| `maxframe_python_version_check` | profile or model | `warn` | CP311 custom-UDF compatibility policy: `warn`, `error`, or `off`. |
+| `maxframe_pythonpack_production` | profile or model | `true` | Use MaxFrame's durable production cache for successful PythonPack builds. |
 | `timeout` | model | `600` | MaxFrame session timeout in seconds. Increase it for queued or large DAGs. |
 | `lifecycle` | model | project behavior | Target table lifecycle in days. |
 | `sql_hints` | model | adapter defaults | MaxCompute SQL settings forwarded to MaxFrame. |
@@ -376,6 +410,10 @@ access token.
 - Normal incremental runs create a lifecycle-1 temporary table from that stage
   before executing the configured MaxCompute incremental SQL.
 - Failed MaxFrame DAG output cleanup is retried up to three times.
+- After a session is destroyed, the adapter removes `tmp_mf_<session>_*`
+  tables and `mf_udf_<session>_*` functions that MaxFrame may leave in the
+  model schema. Cleanup is restricted to the exact session IDs created by the
+  current dbt node.
 - Automatic-partition staging tables use lifecycle `1`, are removed before
   reuse, and are removed after a successful run. If execution fails after the
   MaxFrame stage succeeds but before SQL cleanup completes, a staging table can
@@ -416,6 +454,22 @@ The following capabilities are intentionally unsupported or not yet complete:
    model runtime and default to MaxCompute CPython 3.11 (`cp311`).
 
 ## Troubleshooting
+
+### A custom Python UDF worker stalls or crashes
+
+First reproduce the custom-function model with a Python 3.11 dbt environment:
+
+```bash
+python3.11 -m venv .venv
+. .venv/bin/activate
+python -m pip install "dbt-maxcompute[maxframe]"
+python -m dbt run --select my_python_model
+```
+
+Using `python -m dbt` makes it explicit which interpreter owns the process.
+This is a custom-UDF compatibility diagnostic, not a general MaxFrame SDK
+installation requirement. A production target that intentionally enforces the
+validated environment can set `maxframe_python_version_check: error`.
 
 ### MaxFrame is required for Python models
 

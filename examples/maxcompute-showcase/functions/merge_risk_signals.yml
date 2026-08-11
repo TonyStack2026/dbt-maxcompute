@@ -1,0 +1,16 @@
+functions:
+  - name: merge_risk_signals
+    description: >
+      Bounded distributed aggregate that merges risk JSON profiles and keeps
+      counts, top-level score statistics, timestamps, countries, and reasons.
+    config:
+      type: aggregate
+      entry_point: MergeRiskSignals
+      maxcompute:
+        python_libraries:
+          - dbt_showcase_pydeps_cp311.zip
+    arguments:
+      - name: risk_profile
+        data_type: string
+    returns:
+      data_type: string

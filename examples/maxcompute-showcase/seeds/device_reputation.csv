@@ -1,0 +1,7 @@
+device_id,reputation_score,is_tor,last_seen_at
+dev-a,96,false,2026-08-09T07:00:00Z
+dev-b,91,false,2026-08-09T02:00:00Z
+dev-c,43,false,2026-08-09T18:10:00Z
+dev-d,98,false,2026-08-10T07:05:00Z
+dev-x,8,true,2026-08-09T22:15:00Z
+dev-z,0,true,2026-08-11T01:30:00Z

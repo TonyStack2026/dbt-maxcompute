@@ -30,6 +30,14 @@ models:
       +schema: showcase_ops
     05_maxqa:
       +schema: showcase_maxqa
+    06_python_workloads:
+      +schema: showcase_python
+
+# dbt Core requires every Python function to have an effective runtime.
+# Setting it once here keeps the individual function YAML focused on the
+# MaxCompute-specific dependency resources.
+functions:
+  +runtime_version: "3.11"
 
 seeds:
   maxcompute_showcase:

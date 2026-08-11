@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -15,6 +16,9 @@ from dbt.adapters.maxcompute.context import GLOBAL_SQL_HINTS
 from dbt.adapters.maxcompute.credentials import MaxComputeCredentials
 
 logger = AdapterLogger("MaxCompute")
+
+_RECOMMENDED_MAXFRAME_UDF_PYTHON = (3, 11)
+_WARNED_MAXFRAME_PYTHON_VERSIONS: set[tuple[int, int]] = set()
 
 
 @dataclass
@@ -73,7 +77,63 @@ class MaxFramePythonJobHelper(PythonJobHelper):
         default_schema = self._parsed_model.get("schema") or self._credentials.schema
         if default_schema:
             options["session.default_schema"] = default_schema
+        production_cache = self._maxframe_pythonpack_production()
+        options["pythonpack.task.settings"] = {
+            "odps.pythonpack.production": "true" if production_cache else "false"
+        }
         return options
+
+    def _maxframe_pythonpack_production(self) -> bool:
+        raw_value = self._parsed_model["config"].get("maxframe_pythonpack_production")
+        if raw_value is None:
+            raw_value = getattr(self._credentials, "maxframe_pythonpack_production", True)
+        if raw_value is None:
+            return True
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"true", "yes", "1"}:
+                return True
+            if normalized in {"false", "no", "0"}:
+                return False
+        raise DbtRuntimeError("`maxframe_pythonpack_production` must be a boolean")
+
+    def _maxframe_python_version_check(self) -> str:
+        raw_value = self._parsed_model["config"].get("maxframe_python_version_check")
+        if raw_value is None:
+            raw_value = getattr(self._credentials, "maxframe_python_version_check", "warn")
+        normalized = str(raw_value or "warn").strip().lower()
+        if normalized not in {"warn", "error", "off"}:
+            raise DbtRuntimeError(
+                "`maxframe_python_version_check` must be one of: warn, error, off"
+            )
+        return normalized
+
+    def _check_local_maxframe_python_version(self, version_info: Any = None) -> None:
+        """Surface CP311 UDF serialization risk without restricting the SDK."""
+        current = version_info or sys.version_info
+        current_version = (current.major, current.minor)
+        if current_version == _RECOMMENDED_MAXFRAME_UDF_PYTHON:
+            return
+
+        check_mode = self._maxframe_python_version_check()
+        if check_mode == "off":
+            return
+
+        message = (
+            f"dbt is running on Python {current.major}.{current.minor}. MaxFrame SDK "
+            "loading and job submission remain enabled, but models that serialize "
+            "custom Python functions (for example DataFrame.apply, Series.apply, or "
+            "with_python_requirements) may be incompatible with CPython 3.11 workers. "
+            "Use a Python 3.11 dbt environment for those models, or set "
+            "`maxframe_python_version_check: off` after validating the workload."
+        )
+        if check_mode == "error":
+            raise DbtRuntimeError(message)
+        if current_version not in _WARNED_MAXFRAME_PYTHON_VERSIONS:
+            _WARNED_MAXFRAME_PYTHON_VERSIONS.add(current_version)
+            logger.warning(message)
 
     def _model_filename(self) -> str:
         return self._parsed_model.get("original_file_path") or self._parsed_model.get(
@@ -127,7 +187,7 @@ class MaxFramePythonJobHelper(PythonJobHelper):
         # failures as HTTPClientError rather than PyODPS exceptions.
         if exc.__class__.__module__ == "tornado.httpclient":
             status_code = getattr(exc, "code", None)
-            if status_code in (408, 429):
+            if status_code in (408, 429) or (isinstance(status_code, int) and status_code >= 500):
                 return True
         if isinstance(exc, ODPSError):
             status_code = getattr(exc, "status_code", None)
@@ -178,10 +238,12 @@ class MaxFramePythonJobHelper(PythonJobHelper):
 
     def submit(self, compiled_code: str) -> MaxFrameSubmissionResult:
         maxframe, maxframe_option_context = _load_maxframe_runtime()
+        self._check_local_maxframe_python_version()
         timeout = self._maxframe_timeout()
         odps_entry = None
         session = None
         active_sessions: list[Any] = []
+        created_session_ids: list[str] = []
         namespace: Dict[str, Any] = {}
         temporary_relations: list[str] = []
         succeeded = False
@@ -224,6 +286,7 @@ class MaxFramePythonJobHelper(PythonJobHelper):
                     )
                     active_sessions.append(session)
                     session_id = str(session.session_id)
+                    created_session_ids.append(session_id)
                     logview_available = self._logview_is_available(session)
 
                     if retry_number:
@@ -294,6 +357,15 @@ class MaxFramePythonJobHelper(PythonJobHelper):
                     continue
                 destroyed_session_objects.add(session_object_id)
                 destroy_active_session(active_session)
+            if odps_entry is not None:
+                model_schema = self._parsed_model.get("schema") or self._credentials.schema
+                # Retry sessions are destroyed and removed from active_sessions
+                # before finally runs, but their server-side objects still need
+                # the same exact-prefix cleanup as the final session.
+                for active_session_id in dict.fromkeys(created_session_ids):
+                    self._cleanup_maxframe_session_artifacts(
+                        active_session_id, odps_entry, model_schema
+                    )
 
     @staticmethod
     def _cleanup_failed_relation(namespace: Dict[str, Any], odps_entry: Any) -> None:
@@ -321,3 +393,49 @@ class MaxFramePythonJobHelper(PythonJobHelper):
                     f"{target_relation} after attempt {cleanup_attempt}"
                 )
                 time.sleep(0.5 * cleanup_attempt)
+
+    @staticmethod
+    def _cleanup_maxframe_session_artifacts(
+        session_id: str, odps_entry: Any, schema: str | None
+    ) -> None:
+        """Remove session-scoped objects left behind by the MaxFrame service."""
+        if not schema:
+            return
+
+        table_prefix = f"tmp_mf_{session_id}_"
+        function_prefix = f"mf_udf_{session_id}_"
+        try:
+            table_names = [
+                table.name
+                for table in odps_entry.list_tables(schema=schema)
+                if table.name.startswith(table_prefix)
+            ]
+            function_names = [
+                function.name
+                for function in odps_entry.list_functions(schema=schema)
+                if function.name.startswith(function_prefix)
+            ]
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Failed to list MaxFrame session artifacts for " f"{session_id}: {cleanup_exc}"
+            )
+            return
+
+        for table_name in table_names:
+            try:
+                odps_entry.delete_table(table_name, schema=schema, if_exists=True)
+                logger.debug(f"Dropped MaxFrame session table: {schema}.{table_name}")
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to drop MaxFrame session table "
+                    f"{schema}.{table_name}: {cleanup_exc}"
+                )
+        for function_name in function_names:
+            try:
+                odps_entry.delete_function(function_name, schema=schema)
+                logger.debug(f"Dropped MaxFrame session function: {schema}.{function_name}")
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to drop MaxFrame session function "
+                    f"{schema}.{function_name}: {cleanup_exc}"
+                )

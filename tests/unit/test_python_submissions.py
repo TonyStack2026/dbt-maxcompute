@@ -13,6 +13,7 @@ from dbt.adapters.maxcompute.impl import MaxComputeAdapter
 from dbt.adapters.maxcompute.python_submissions import (
     MaxFramePythonJobHelper,
     MaxFrameSubmissionResult,
+    _WARNED_MAXFRAME_PYTHON_VERSIONS,
     _load_maxframe_runtime,
 )
 from dbt.adapters.maxcompute.relation_configs._partition import PartitionConfig
@@ -58,6 +59,8 @@ def make_credentials():
     credentials.tunnel_endpoint = "https://dt.example/api"
     credentials.maxframe_quota_name = "profile_quota"
     credentials.maxframe_retries = None
+    credentials.maxframe_python_version_check = "warn"
+    credentials.maxframe_pythonpack_production = True
     credentials.odps.return_value = MagicMock()
     return credentials
 
@@ -116,6 +119,7 @@ def test_submit_executes_compiled_code_and_cleans_up_session():
     assert captured_options["session.default_schema"] == "analytics"
     assert captured_options["session.quota_name"] == "profile_quota"
     assert captured_options["local_timezone"] == "Asia/Shanghai"
+    assert captured_options["pythonpack.task.settings"] == {"odps.pythonpack.production": "true"}
     assert captured_options["sql.settings"]["odps.sql.allow.fullscan"] == "false"
     assert "dbt.execution_mode" not in captured_options["sql.settings"]
     assert result == MaxFrameSubmissionResult(
@@ -151,6 +155,31 @@ raise ValueError("model exploded")
         "project.schema.model__dbt_tmp", if_exists=True
     )
     assert session.destroyed
+
+
+def test_cleans_up_session_scoped_maxframe_tables_and_functions():
+    odps_entry = MagicMock()
+    odps_entry.list_tables.return_value = [
+        SimpleNamespace(name="tmp_mf_session_1_result"),
+        SimpleNamespace(name="tmp_mf_other_session_result"),
+        SimpleNamespace(name="user_table"),
+    ]
+    odps_entry.list_functions.return_value = [
+        SimpleNamespace(name="mf_udf_session_1_user_udf_123"),
+        SimpleNamespace(name="mf_udf_other_session_user_udf_456"),
+        SimpleNamespace(name="user_function"),
+    ]
+
+    MaxFramePythonJobHelper._cleanup_maxframe_session_artifacts(
+        "session_1", odps_entry, "analytics"
+    )
+
+    odps_entry.delete_table.assert_called_once_with(
+        "tmp_mf_session_1_result", schema="analytics", if_exists=True
+    )
+    odps_entry.delete_function.assert_called_once_with(
+        "mf_udf_session_1_user_udf_123", schema="analytics"
+    )
 
 
 def test_submit_retries_intermediate_cleanup_after_transient_failure():
@@ -203,6 +232,52 @@ def test_model_schema_overrides_profile_default_schema():
     assert helper._maxframe_options()["session.default_schema"] == "generated_model_schema"
 
 
+def test_model_forwards_managed_runtime_image_to_maxframe_sql_settings():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(sql_hints={"odps.session.image": "sklearn"}),
+        make_credentials(),
+    )
+
+    assert helper._maxframe_options()["sql.settings"]["odps.session.image"] == "sklearn"
+
+
+def test_model_can_disable_pythonpack_production_cache():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_pythonpack_production=False), make_credentials()
+    )
+
+    assert helper._maxframe_options()["pythonpack.task.settings"] == {
+        "odps.pythonpack.production": "false"
+    }
+
+
+@pytest.mark.parametrize("value", [None, True, "true", "yes", "1"])
+def test_pythonpack_production_cache_is_enabled_by_default(value):
+    credentials = make_credentials()
+    credentials.maxframe_pythonpack_production = value
+    helper = MaxFramePythonJobHelper(make_parsed_model(), credentials)
+
+    assert helper._maxframe_pythonpack_production() is True
+
+
+@pytest.mark.parametrize("value", [False, "false", "no", "0"])
+def test_pythonpack_production_cache_accepts_false_values(value):
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_pythonpack_production=value), make_credentials()
+    )
+
+    assert helper._maxframe_pythonpack_production() is False
+
+
+def test_invalid_pythonpack_production_cache_setting_fails():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_pythonpack_production="sometimes"), make_credentials()
+    )
+
+    with pytest.raises(DbtRuntimeError, match="must be a boolean"):
+        helper._maxframe_pythonpack_production()
+
+
 def test_maxframe_retries_default_and_profile_override():
     credentials = make_credentials()
     helper = MaxFramePythonJobHelper(make_parsed_model(), credentials)
@@ -233,6 +308,14 @@ def test_submit_retries_dag_transport_failure_with_new_session():
     maxframe = SequencedMaxFrame(first_session, retry_session)
     credentials = make_credentials()
     credentials.odps.return_value.retry_attempts = 0
+    credentials.odps.return_value.list_tables.side_effect = [
+        [SimpleNamespace(name="tmp_mf_first-session_intermediate")],
+        [],
+    ]
+    credentials.odps.return_value.list_functions.side_effect = [
+        [SimpleNamespace(name="mf_udf_first-session_row_udf")],
+        [],
+    ]
     helper = MaxFramePythonJobHelper(make_parsed_model(maxframe_retries=1), credentials)
 
     @contextmanager
@@ -261,6 +344,12 @@ _dbt_maxframe_execute(RetryOnceTileable())
     assert retry_session.destroyed
     assert retry_session.executed_with is retry_session
     assert len(maxframe.new_session_kwargs) == 2
+    credentials.odps.return_value.delete_table.assert_called_once_with(
+        "tmp_mf_first-session_intermediate", schema="analytics", if_exists=True
+    )
+    credentials.odps.return_value.delete_function.assert_called_once_with(
+        "mf_udf_first-session_row_udf", schema="analytics"
+    )
 
 
 class FakeTornadoHTTPClientError(Exception):
@@ -274,7 +363,7 @@ class FakeTornadoHTTPClientError(Exception):
     ("error", "expected"),
     [
         (ConnectionResetError("reset"), True),
-        (FakeTornadoHTTPClientError(500), False),
+        (FakeTornadoHTTPClientError(500), True),
         (FakeTornadoHTTPClientError(429), True),
         (FakeTornadoHTTPClientError(400), False),
         (ODPSError("server unavailable", status_code=500), True),
@@ -403,6 +492,68 @@ def test_missing_maxframe_has_install_hint():
             _load_maxframe_runtime()
 
 
+@pytest.mark.parametrize("value", [None, "warn", "WARN"])
+def test_python_version_check_defaults_to_warning(value):
+    credentials = make_credentials()
+    credentials.maxframe_python_version_check = value
+    helper = MaxFramePythonJobHelper(make_parsed_model(), credentials)
+
+    assert helper._maxframe_python_version_check() == "warn"
+
+
+def test_non_311_python_warns_once_and_allows_submission():
+    helper = MaxFramePythonJobHelper(make_parsed_model(), make_credentials())
+    version = SimpleNamespace(major=3, minor=12)
+    _WARNED_MAXFRAME_PYTHON_VERSIONS.clear()
+
+    with patch("dbt.adapters.maxcompute.python_submissions.logger.warning") as warning:
+        helper._check_local_maxframe_python_version(version)
+        helper._check_local_maxframe_python_version(version)
+
+    warning.assert_called_once()
+    assert "job submission remain enabled" in warning.call_args.args[0]
+
+
+def test_non_311_python_can_be_rejected_by_explicit_strict_mode():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_python_version_check="error"), make_credentials()
+    )
+
+    with pytest.raises(DbtRuntimeError, match="Python 3.12"):
+        helper._check_local_maxframe_python_version(SimpleNamespace(major=3, minor=12))
+
+
+def test_non_311_python_check_can_be_disabled():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_python_version_check="off"), make_credentials()
+    )
+
+    with patch("dbt.adapters.maxcompute.python_submissions.logger.warning") as warning:
+        helper._check_local_maxframe_python_version(SimpleNamespace(major=3, minor=12))
+
+    warning.assert_not_called()
+
+
+def test_python_311_never_warns_or_fails():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_python_version_check="error"), make_credentials()
+    )
+
+    with patch("dbt.adapters.maxcompute.python_submissions.logger.warning") as warning:
+        helper._check_local_maxframe_python_version(SimpleNamespace(major=3, minor=11))
+
+    warning.assert_not_called()
+
+
+def test_invalid_python_version_check_fails_with_actionable_error():
+    helper = MaxFramePythonJobHelper(
+        make_parsed_model(maxframe_python_version_check="sometimes"), make_credentials()
+    )
+
+    with pytest.raises(DbtRuntimeError, match="warn, error, off"):
+        helper._maxframe_python_version_check()
+
+
 def test_adapter_response_contains_session_without_logview_token():
     result = MaxFrameSubmissionResult(
         run_id="session-1",
@@ -495,6 +646,9 @@ maxframe_parse_test:
       access_key_secret: test
       submission_method: maxframe
       maxframe_quota_name: test_quota
+      maxframe_retries: 1
+      maxframe_python_version_check: error
+      maxframe_pythonpack_production: false
 """,
         encoding="utf-8",
     )

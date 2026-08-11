@@ -1,0 +1,6 @@
+customer_id,customer_name,email,phone,tier,country_code,signup_at,credit_limit
+cus-001,José Alvarez,jose.alvarez@example.com,+14155552671,gold,US,2024-03-11T10:20:00Z,5000
+cus-002,Wei Zhang,wei.zhang@example.cn,+8613800138000,platinum,CN,2022-07-01T08:00:00Z,20000
+cus-003,Élodie Martin,elodie.martin@example.fr,+33612345678,silver,FR,2025-01-19T12:00:00Z,3000
+cus-004,Jon Smyth,john.smith+temp@example.co.uk,+442079460018,basic,GB,2026-08-01T06:30:00Z,1000
+cus-005,John Smith,john.smith@example.co.uk,+442079460019,basic,GB,2026-08-02T06:30:00Z,1200

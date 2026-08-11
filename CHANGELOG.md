@@ -5,6 +5,27 @@ All notable changes to `dbt-maxcompute` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- MaxFrame custom-function models now recommend a Python 3.11 client while
+  leaving SDK installation and submission enabled on other adapter-supported
+  Python versions. Controlled targets can opt into a strict submission check.
+- Successful PythonPack builds use the production cache by default. Large
+  scientific dependencies can use a managed MaxCompute runtime image instead
+  of rebuilding native packages for each environment.
+
+### Fixed
+
+- Partition columns are included when a MaxFrame Python model reads a
+  partitioned `ref` or `source`.
+- Session-scoped `tmp_mf_*` tables and `mf_udf_*` functions are cleaned for
+  every session created by a node, including failed sessions replaced during
+  retry.
+- Transient transport, throttling, timeout, and HTTP 5xx failures retry the
+  compiled model in a new MaxFrame session with bounded attempts.
+
 ## [1.11.3b1] — 2026-08-09
 
 ### Added

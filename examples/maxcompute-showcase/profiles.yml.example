@@ -18,9 +18,17 @@ maxcompute_showcase:
       project: your_maxcompute_project       # required
       schema: default                        # default schema inside the project
       endpoint: http://service.cn-hangzhou.maxcompute.aliyun.com/api
-      auth_type: aliyun_access_key
-      access_id: "{{ env_var('ODPS_ACCESS_ID') }}"
-      secret_access_key: "{{ env_var('ODPS_SECRET_ACCESS_KEY') }}"
+      auth_type: access_key
+      access_key_id: "{{ env_var('ODPS_ACCESS_ID') }}"
+      access_key_secret: "{{ env_var('ODPS_SECRET_ACCESS_KEY') }}"
+
+      # Python models use MaxFrame. Set a dedicated quota when the project
+      # does not expose an appropriate default MaxFrame quota.
+      submission_method: maxframe
+      # maxframe_quota_name: your_maxframe_quota
+      maxframe_retries: 2
+      maxframe_python_version_check: warn
+      maxframe_pythonpack_production: true
 
     # ── MaxQA (MCQA V2) mode ──────────────────────────────────────────
     # Submits SQL through the MaxQA interactive endpoint for faster
@@ -31,9 +39,9 @@ maxcompute_showcase:
       project: your_maxcompute_project
       schema: default
       endpoint: http://service.cn-hangzhou.maxcompute.aliyun.com/api
-      auth_type: aliyun_access_key
-      access_id: "{{ env_var('ODPS_ACCESS_ID') }}"
-      secret_access_key: "{{ env_var('ODPS_SECRET_ACCESS_KEY') }}"
+      auth_type: access_key
+      access_key_id: "{{ env_var('ODPS_ACCESS_ID') }}"
+      access_key_secret: "{{ env_var('ODPS_SECRET_ACCESS_KEY') }}"
 
       execution_mode: maxqa                  # enable MaxQA
       quota_name: your_interactive_quota     # optional — interactive quota group

@@ -39,12 +39,18 @@ models/
   02_incremental/          all five incremental strategies
   03_materialized_view/    MV with lifecycle + partitioning
   04_operations/           lifecycle, transactional / delta tables
+  05_maxqa/                interactive MaxQA execution and fallback
+  06_python_workloads/     complex Python UDF/UDAF and MaxFrame dependency lab
 snapshots/                 SCD-2 snapshot
 seeds/                     a tiny synthetic orders dataset
 ```
 
 Each subfolder has its own `README.md` explaining what the models in it
 demonstrate and which adapter features they exercise.
+
+The complex Python workloads intentionally involve external dependencies and
+are best run explicitly. Read models/06_python_workloads/README.md before
+running that folder.
 
 ## Run it
 

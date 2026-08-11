@@ -1,0 +1,22 @@
+functions:
+  - name: enrich_risk_event
+    description: >
+      Parses nested JSON, normalizes timestamps and international phone
+      numbers, transliterates identity fields, and returns a deterministic
+      risk profile JSON document.
+    config:
+      entry_point: main
+      maxcompute:
+        python_libraries:
+          - dbt_showcase_pydeps_cp311.zip
+    arguments:
+      - name: event_json
+        data_type: string
+      - name: phone
+        data_type: string
+      - name: event_time
+        data_type: string
+      - name: default_region
+        data_type: string
+    returns:
+      data_type: string

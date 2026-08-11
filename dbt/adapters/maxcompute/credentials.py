@@ -25,6 +25,8 @@ class MaxComputeCredentials(Credentials):
     submission_method: Optional[str] = None
     maxframe_quota_name: Optional[str] = None
     maxframe_retries: Optional[int] = None
+    maxframe_python_version_check: str = "warn"
+    maxframe_pythonpack_production: bool = True
 
     # auth config: All configuration items supported by alibabacloud_credentials
     # It should be noted that in order to avoid ambiguity,

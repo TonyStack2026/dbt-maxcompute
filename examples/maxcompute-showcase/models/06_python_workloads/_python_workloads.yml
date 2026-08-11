@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: risk_events_via_udf
+    description: Row-level output of the resource-backed catalog Python UDF.
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: risk_profile
+        tests: [not_null]
+
+  - name: risk_customer_daily_via_udaf
+    description: Distributed UDAF rollup grouped by customer and partition day.
+    columns:
+      - name: customer_id
+        tests: [not_null]
+      - name: risk_rollup
+        tests: [not_null]
+
+  - name: risk_event_features_maxframe
+    description: >
+      MaxFrame row enrichment using JMESPath, dateutil, phonenumbers, and
+      text-unidecode through automatic PythonPack dependency packaging.
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: risk_score
+        tests: [not_null]
+      - name: ds
+        tests: [not_null]
+
+  - name: risk_customer_daily_maxframe
+    description: Incremental multi-stage aggregation over MaxFrame feature output.
+    columns:
+      - name: customer_id
+        tests: [not_null]
+      - name: ds
+        tests: [not_null]
+
+  - name: risk_identity_similarity_maxframe
+    description: >
+      Heavy dependency stress job using RapidFuzz through PythonPack and
+      scikit-learn from MaxCompute's managed CP311 image.
+    columns:
+      - name: left_customer_id
+        tests: [not_null]
+      - name: right_customer_id
+        tests: [not_null]
