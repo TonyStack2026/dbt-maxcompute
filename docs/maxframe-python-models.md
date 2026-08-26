@@ -93,6 +93,16 @@ my_maxcompute_project:
 Do not store credentials in the dbt project. Use environment variables, STS,
 RAM roles, OIDC, or another supported credential provider.
 
+To use the Alibaba Cloud default credential provider chain, replace the three
+access-key lines above with:
+
+```yaml
+      auth_type: chain
+```
+
+The same chain identity is used for dbt SQL and MaxFrame Python models. No
+`sitecustomize.py` or `CredentialProviderAccount` monkey patch is required.
+
 `submission_method: maxframe` is optional because MaxFrame is the default
 Python submission method. `maxframe_retries: 2` means the adapter may create
 up to two retry sessions after the initial session when waiting for a DAG fails

@@ -9,6 +9,19 @@ from odps import options
 from odps.accounts import CredentialProviderAccount
 
 
+class _CopySafeCredentialProviderAccount(CredentialProviderAccount):
+    """Share the thread-safe credential provider across copied ODPS options."""
+
+    def __deepcopy__(self, memo):
+        # PyODPS option_context deep-copies the configured account. Dynamic
+        # providers (notably the default provider chain) own refresh locks and
+        # executors that cannot be pickled or safely duplicated. The account
+        # already serializes refresh and signing with its own lock, so sharing
+        # it between nested MaxFrame option contexts is the correct behavior.
+        memo[id(self)] = self
+        return self
+
+
 @dataclass
 class MaxComputeCredentials(Credentials):
     endpoint: str
@@ -108,7 +121,7 @@ class MaxComputeCredentials(Credentials):
                 sts_endpoint=self.sts_endpoint,
             )
             cred = Client(config)
-        account = CredentialProviderAccount(cred)
+        account = _CopySafeCredentialProviderAccount(cred)
         o = ODPS(
             account=account,
             project=self.database,

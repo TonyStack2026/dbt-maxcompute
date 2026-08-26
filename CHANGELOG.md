@@ -5,6 +5,15 @@ All notable changes to `dbt-maxcompute` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- MaxFrame Python models now support dynamic credential providers, including
+  `auth_type: chain`, without requiring a global `CredentialProviderAccount`
+  monkey patch. Nested PyODPS option contexts reuse the provider's existing
+  thread-safe refresh state instead of attempting to copy its internal lock.
+
 ## [1.11.3b2] — 2026-08-11
 
 ### Added

@@ -62,6 +62,16 @@ Use STS, RAM roles, OIDC, or another supported credential provider instead of
 long-lived access keys when possible. Never commit credentials to a dbt
 project.
 
+To use the Alibaba Cloud default credential provider chain, replace the three
+access-key lines above with:
+
+```yaml
+      auth_type: chain
+```
+
+The chain works for both dbt SQL and MaxFrame Python models. No
+`sitecustomize.py` authentication workaround is required.
+
 The MaxFrame-specific settings are:
 
 | Setting | Default | Meaning |

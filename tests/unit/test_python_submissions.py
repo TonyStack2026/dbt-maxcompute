@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from dbt.cli.main import dbtRunner
 from dbt_common.exceptions import DbtRuntimeError
+from odps import options as odps_options
+from odps.config import option_context as odps_option_context
 from odps.errors import ODPSError
 from odps.types import Column, OdpsSchema
 
+from dbt.adapters.maxcompute.credentials import MaxComputeCredentials
 from dbt.adapters.maxcompute.impl import MaxComputeAdapter
 from dbt.adapters.maxcompute.python_submissions import (
     MaxFramePythonJobHelper,
@@ -80,6 +83,26 @@ def make_parsed_model(**config):
         "original_file_path": "models/python_model.py",
         "config": model_config,
     }
+
+
+def test_chain_credentials_survive_nested_pyodps_option_context():
+    credentials = MaxComputeCredentials(
+        database="test_project",
+        schema="analytics",
+        endpoint="https://service.example.invalid/api",
+        auth_type="chain",
+    )
+    with patch("dbt.adapters.maxcompute.credentials.ODPS") as odps_class:
+        credentials.odps()
+    account = odps_class.call_args.kwargs["account"]
+
+    # MaxFrame opens nested PyODPS option contexts after dbt exposes the
+    # session's ODPS entry through global options. The provider chain contains
+    # a refresh lock, so this exercises the exact deepcopy boundary from #27.
+    with odps_option_context():
+        odps_options.account = account
+        with odps_option_context():
+            assert odps_options.account is account
 
 
 @contextmanager
