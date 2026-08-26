@@ -41,7 +41,7 @@ level than the adapter package:
 | Python scalar and aggregate UDFs | **Beta** | Evaluation and controlled workloads; dependency conventions may change before GA |
 
 Production Preview and Beta limitations are documented in their respective
-guides. Pre-release package versions such as `1.11.3b2` do not replace the
+guides. Pre-release package versions such as `1.11.3b3` do not replace the
 latest stable release.
 
 ## Getting Started

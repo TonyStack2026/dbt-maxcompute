@@ -1,6 +1,6 @@
 # MaxFrame Python user guide
 
-`dbt-maxcompute` 1.11.3b2 introduces MaxFrame Python models as a
+`dbt-maxcompute` 1.11.3b3 provides MaxFrame Python models as a
 **Production Preview** and MaxCompute catalog Python UDF/UDAF resources as a
 **Beta** capability.
 
@@ -18,7 +18,7 @@ your model serializes custom Python functions to MaxCompute workers.
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "dbt-maxcompute[maxframe]==1.11.3b2"
+python -m pip install "dbt-maxcompute[maxframe]==1.11.3b3"
 python -m dbt --version
 ```
 
