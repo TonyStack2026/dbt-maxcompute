@@ -737,3 +737,26 @@ def model(dbt, session):
     )
 
     assert parse_result.success, parse_result.exception
+
+
+@pytest.mark.parametrize("error", ["KeyboardInterrupt", "RuntimeError"])
+def test_failed_model_stops_session_before_dropping_output(error):
+    events = []
+    session = FakeSession()
+    session.destroy = lambda: events.append("destroy")
+    credentials = make_credentials()
+    credentials.odps.return_value.delete_table.side_effect = (
+        lambda *args, **kwargs: events.append("drop")
+    )
+    helper = MaxFramePythonJobHelper(make_parsed_model(maxframe_retries=0), credentials)
+    compiled_code = (
+        "_dbt_maxframe_target_relation = 'analytics.intermediate'\n"
+        f"raise {error}('interrupted')"
+    )
+    expected_error = KeyboardInterrupt if error == "KeyboardInterrupt" else DbtRuntimeError
+    with patch(
+        "dbt.adapters.maxcompute.python_submissions._load_maxframe_runtime",
+        return_value=(FakeMaxFrame(session), lambda options: capturing_option_context({}, options)),
+    ), pytest.raises(expected_error):
+        helper.submit(compiled_code)
+    assert events == ["destroy", "drop"]
