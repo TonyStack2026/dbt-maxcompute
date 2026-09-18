@@ -121,6 +121,9 @@ see the official documentation: [dbt Model Configs](https://docs.getdbt.com/refe
 While dbt core provides native configurations like `materialized` and `sql_header`, this section focuses on
 **dbt-maxcompute specific configurations** that control table creation behavior during materialization.
 
+For Append and PK Delta Table creation with SQL `table` and `incremental` models, see
+[Delta Table support and configuration (中文)](docs/delta-tables.md).
+
 
 #### dbt-maxcompute Specific Configurations
 
