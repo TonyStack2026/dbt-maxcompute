@@ -90,6 +90,25 @@ Exit codes:
 
 Cases skipped because credentials are missing also make the script exit `2`.
 
+### Unrelated breakage is reported, not absorbed
+
+`pytest` aborts the session when any collected file fails to import, so a broken
+module anywhere in `tests/functional` could leave this entry with no evidence at
+all - and the JUnit suite header still reports a `tests` count for the collection
+error, which reads like "1 case ran". The entry therefore passes
+`--continue-on-collection-errors` and counts cases per `<testcase>` element, so
+the numbers describe what actually executed:
+
+```text
+  cases:   executed=1 passed=1 failed=0 errors=1 skipped=1 not_run=[tests.functional.test_zz_import_probe]
+  status:  FAILED (ran with failures)
+```
+
+Measured on a live project with a deliberately broken import: our case still ran
+and passed, and the run stayed red because the repository is broken. Before the
+change the same session reported `executed=1 passed=0` when nothing had run. A
+collection error can neither become a pass nor hide the cases that did run.
+
 Cleanup is attributed, not guessed. The suite records every schema it creates
 into `DBT_INTEGRATION_SCHEMA_MANIFEST` (a file in the script's private temp
 dir, appended as each class starts), and both the in-test assertion and the

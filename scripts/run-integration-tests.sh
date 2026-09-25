@@ -143,9 +143,13 @@ fi
 JUNIT_XML="${TEMP_DIR}/junit.xml"
 echo "suite:     ${SUITE} (pytest -m ${MARKER})"
 rc=0
+# --continue-on-collection-errors: one broken import somewhere else in
+# tests/functional must not abort the session and silently replace our evidence
+# with "0 cases ran".  The error is still reported and still turns the run red.
 "$PYTHON" -m pytest \
   -m "$MARKER" \
   -v -rA --tb=short \
+  --continue-on-collection-errors \
   --junitxml="$JUNIT_XML" \
   tests/functional \
   ${DBT_INTEGRATION_KEYWORD:+-k "$DBT_INTEGRATION_KEYWORD"} \
@@ -159,15 +163,26 @@ import sys
 import xml.etree.ElementTree as ET
 
 root = ET.parse(sys.argv[1]).getroot()
-suites = [root] if root.tag == "testsuite" else root.iter("testsuite")
-total = errors = failures = skipped = 0
-for suite in suites:
-    total += int(suite.get("tests", 0))
-    errors += int(suite.get("errors", 0))
-    failures += int(suite.get("failures", 0))
-    skipped += int(suite.get("skipped", 0))
-executed = total - skipped
-print(f"executed={executed} passed={executed - failures - errors} failed={failures} errors={errors} skipped={skipped}")
+cases = list(root.iter("testcase"))
+passed = failed = errors = skipped = 0
+broken = []
+for case in cases:
+    name = case.get("name", "?")
+    if case.find("failure") is not None:
+        failed += 1
+    elif case.find("error") is not None:
+        # a collection error shows up as a testcase too, but nothing ran
+        errors += 1
+        broken.append(name)
+    elif case.find("skipped") is not None:
+        skipped += 1
+    else:
+        passed += 1
+executed = passed + failed
+print(
+    f"executed={executed} passed={passed} failed={failed} errors={errors} skipped={skipped}"
+    + (f" not_run=[{', '.join(sorted(broken))}]" if broken else "")
+)
 PY
 )"
 
@@ -178,6 +193,9 @@ echo "  cases:   ${SUMMARY}"
 case "$rc" in
   0) outcome="ran" ;;
   1) outcome="ran with failures" ;;
+  2) outcome="pytest interrupted (collection or usage error - see the log above)" ;;
+  3) outcome="pytest internal error" ;;
+  4) outcome="pytest usage error" ;;
   5) outcome="no tests collected" ;;
   *) outcome="abnormal exit (pytest rc=${rc})" ;;
 esac
