@@ -124,6 +124,22 @@ were recorded the script says `cleanup: UNKNOWN` instead of inventing a verdict.
 Running `pytest` directly is fine too: every case that needs a server is
 skipped with the reason computed by `tests/maxcompute_gating.py`.
 
+## Verified baselines
+
+The entry has been run against a live project on two dependency resolutions,
+because they are not the same thing:
+
+| baseline | what it is | result |
+| --- | --- | --- |
+| Python 3.12.3, dbt-core 1.11.2, pyodps 0.13.2, pytest 9.1.1 | the compatibility line README declares, adapter installed from this source tree | minimal set 6/6 (389 s); `--suite core` 20/20 (1180 s) |
+| Python 3.10.21, dbt-core 1.12.5, dbt-common 1.39.0, dbt-adapters 1.24.5, dbt-tests-adapter 1.20.0, pytest 9.1.1 | what `pip install -r dev-requirements.txt && pip install -e .` resolves to today, which is what this workflow job installs | minimal set 6/6 (379 s), 136 unit tests pass, all 246 functional tests still collect |
+
+Note the asymmetry rather than reading past it: `setup.py` bounds `dbt-core` as
+`>=1.11.2` with no upper bound, so a CI install lands on 1.12.5 while README
+declares "the dbt Core 1.11 compatibility line". Both suites passed on both
+resolutions here, but the declared window is a compatibility statement about the
+adapter, not about this test entry, and this change does not alter it.
+
 ## Run it in CI
 
 `.github/workflows/integration.yml` runs on push to `master`/`develop`, on pull
