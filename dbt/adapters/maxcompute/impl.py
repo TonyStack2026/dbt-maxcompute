@@ -211,22 +211,27 @@ class MaxComputeAdapter(SQLAdapter):
                 "transactional), or recreate it with "
                 'TBLPROPERTIES("transactional"="true").'
             )
-        # A primary key on the target - i.e. a PK Delta table - collides with
-        # snapshot history: the expired version and the new current version of
-        # one unique key have to coexist, and an upsert-by-key merge replaces
-        # the row instead of adding the second version, which leaves the record
-        # with no current version at all (measured on a live project).
+        # A primary key on the *data* collides with snapshot history: the
+        # expired version and the new current version of one unique key have to
+        # coexist, and an upsert-by-key merge replaces the row instead of adding
+        # the second version, which leaves the record with no current version at
+        # all (measured on a live project).  A key on the snapshot's own version
+        # id is harmless - that column is already unique per version - so only
+        # the data-column case is refused.
         primary_key = getattr(table, "primary_key", None) if table else None
-        if primary_key:
+        scd_id = (column_names or {}).get("dbt_scd_id", "dbt_scd_id").lower()
+        colliding = [
+            str(column).lower() for column in (primary_key or []) if str(column).lower() != scd_id
+        ]
+        if colliding:
             raise DbtRuntimeError(
                 f"Snapshot target {relation.render()} has a primary key "
-                f"({', '.join(str(column) for column in primary_key)}). A "
-                "snapshot keeps the expired version and the current version of "
-                "one unique key side by side, which a primary key forbids: "
-                "MaxCompute merges by key and the record ends up with no "
-                "current version. Let dbt create the snapshot table (it "
-                "creates one without a primary key), or point the snapshot at "
-                "a different target with the 'to' config."
+                f"({', '.join(colliding)}). A snapshot keeps the expired version "
+                "and the current version of one unique key side by side, which "
+                "that key forbids: MaxCompute merges by key and the record ends "
+                "up with no current version. Let dbt create the snapshot table "
+                "(it creates one without a primary key), or point the snapshot "
+                "at a different target with the 'to' config."
             )
 
     @available.parse_none

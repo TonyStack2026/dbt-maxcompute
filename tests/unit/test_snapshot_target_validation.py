@@ -98,3 +98,38 @@ def test_primary_key_target_is_rejected_because_history_cannot_coexist():
 
 def test_append_delta_target_without_a_key_is_accepted():
     _adapter(True, primary_key=[]).valid_snapshot_target(RELATION)
+
+
+def test_key_on_the_version_id_column_is_accepted():
+    """`dbt_scd_id` is already unique per version, so a key there is not a
+    collision: refusing it would reject a target that can hold history."""
+    adapter = _adapter(True, primary_key=["dbt_scd_id"])
+    adapter.valid_snapshot_target(RELATION)
+
+
+def test_case_differences_in_the_key_name_do_not_change_the_verdict():
+    adapter = _adapter(True, primary_key=["ID"])
+    with pytest.raises(DbtRuntimeError):
+        adapter.valid_snapshot_target(RELATION)
+
+
+def test_renamed_version_id_column_is_respected():
+    column_names = {
+        "dbt_scd_id": "my_scd_id",
+        "dbt_valid_from": "dbt_valid_from",
+        "dbt_valid_to": "dbt_valid_to",
+    }
+    adapter = _adapter(True, primary_key=["my_scd_id"])
+    adapter.get_columns_in_relation = lambda relation: _Columns(
+        [
+            "id",
+            "name",
+            "amount",
+            "updated_at",
+            "my_scd_id",
+            "dbt_updated_at",
+            "dbt_valid_from",
+            "dbt_valid_to",
+        ]
+    )
+    adapter.valid_snapshot_target(RELATION, column_names)
