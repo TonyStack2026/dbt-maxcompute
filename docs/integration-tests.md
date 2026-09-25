@@ -110,3 +110,28 @@ requests, and on a manual dispatch (with an optional `pytest -k` expression).
   gate, not a pass.
 * The script writes the case counts and the verdict into the job summary, so
   "how many cases actually ran" is visible without opening the log.
+
+### Two repository settings this workflow needs
+
+Both were read from the GitHub API on 2026-09-25; re-check before acting on them.
+
+1. **The workflow file is currently registered as disabled.** `GET
+   /repos/aliyun/dbt-maxcompute/actions/workflows` lists
+   `.github/workflows/integration.yml` as `state: disabled_manually` (entry
+   created 2024-10-28, last changed 2024-11-13) with **zero recorded runs**;
+   `master` still carries the file as 0 bytes (`git cat-file -s
+   master:.github/workflows/integration.yml` -> `0`). Someone with repository
+   admin rights has to enable the workflow after the merge, or it will not run
+   at all no matter what the file contains.
+2. **`DBT_PROFILE_YAML` looks unset.** The most recent release run
+   (`v1.11.3b3`, 2026-08-26) failed in the `Prepare MaxCompute test profile`
+   step, whose first command is `test -n "$DBT_PROFILE_YAML"`, and every later
+   job - including the release functional tests - was `skipped`. A secret added
+   since then would not show in that old run, so the live answer is whatever the
+   next run says: with no secret, `gate` reports `integration: BLOCKED` and
+   fails on push/manual runs, which is the intended behaviour rather than a bug.
+
+Until both are sorted out, the credential-free half of the gate is what CI
+actually exercises: `tests/unit/test_maxcompute_gating.py` (10 cases) runs in
+the ordinary `main.yml` job, on fork pull requests included, and it is what
+keeps "we never reached a server" from being reported as a passing integration.
