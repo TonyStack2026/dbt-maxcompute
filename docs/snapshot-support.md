@@ -66,6 +66,11 @@ upstream adapter tests use); that alias is what the cases in
 | pre-existing **PK Delta** table (primary key on the unique key) | refused: `Snapshot target ... has a primary key (id) ... the record ends up with no current version`.  Before the check this combination *reported success*: the first snapshot filled the table (5 current), and after a source update the key had exactly one row left - the expired one - so the current version was silently gone |
 | view / external table / metadata unreadable | **not** refused: the adapter cannot tell, so it lets the statement speak rather than guess |
 
+Only a key over *data* columns is refused.  A key on the snapshot's own version id
+(`dbt_scd_id`, or whatever `snapshot_table_column_names` renames it to) does not prevent two
+versions of one business key from coexisting, so it is accepted - that distinction is pinned
+by the offline cases in `tests/unit/test_snapshot_target_validation.py`.
+
 ## Config keys the snapshot materialization does not apply
 
 `partition_by`, `primary_keys` / `delta`, `transactional=false` and `lifecycle` are
@@ -73,7 +78,7 @@ accepted by dbt's config system and then ignored, because the snapshot table has
 unpartitioned, keyless, and kept for as long as the history is.  The run now warns and
 still creates a table that can hold history - measured for all four: the snapshot
 succeeded, the warning named the key, and the table stayed transactional, unpartitioned,
-without a key (`lifecycle` reported by the server was still "unset", not the requested 30).
+without a key; the server still reported no lifecycle (`-1`) for the snapshot that asked for `lifecycle=30`.
 
 ```
 Snapshot 'snap_part' sets partition_by (a snapshot table is never partitioned: ...) ;
