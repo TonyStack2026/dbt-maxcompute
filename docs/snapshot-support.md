@@ -56,6 +56,23 @@ A row that disappears from the source is ignored unless the snapshot sets `hard_
 upstream adapter tests use); that alias is what the cases in
 `tests/functional/adapter/test_simple_snapshot.py` rely on.
 
+## dbt snapshot options that used to be unverified
+
+Three options had never been run against MaxCompute.  All three are measured now, and two
+of them needed a fix.
+
+| option | measured result | what had to change |
+| --- | --- | --- |
+| `snapshot_meta_column_names` (renaming `dbt_scd_id`, `dbt_valid_to`, ...) | works: the snapshot table holds only the renamed columns, no `dbt_*` leftovers; after updating one key, `+1` version and `+1` expired row with the same number of current rows | nothing |
+| `dbt_valid_to_current` (a sentinel marks the live version instead of NULL) | **was silently wrong**: after an update, the changed key had two live versions and nothing was closed out | the merge macro here is an override, and it hard-coded `dbt_valid_to is null` in its matched branch.  It now mirrors dbt-core's `(dest.valid_to = <sentinel> or dest.valid_to is null)` |
+| `unique_key` as a list (composite key) | **used to die on the second run** with ten `column reference ... dbt_unique_key_1 is ambiguous` errors, after the first run had looked fine | the staging query's helper columns were filtered by exact name only, so `dbt_unique_key_1/2` got `alter table ... add columns`-ed into the snapshot table, and the next run aliased those names a second time over `select *`.  The filter now matches the name shape |
+
+One composite-key behaviour is worth stating because it surprises people: changing a
+**key column itself** is a new record, not a new version - the previous version stays
+current (`+1` total, `+1` current), because the expiry join is on the key.  Putting a
+mutable column into `unique_key` opts into that.
+`TestSnapshotCompositeUniqueKey` pins all three numbers.
+
 ## Target table types
 
 | snapshot table | measured result |
@@ -92,8 +109,8 @@ two table-type cases above are errors because continuing there produces a wrong 
 ## Not verified
 
 * two-tier projects (no schema) - every measurement ran on a three-tier project;
-* `unique_key` over several columns, `snapshot_table_column_names`,
-  `dbt_valid_to_current`, and the column-name variants in dbt's own adapter test suite;
+* invalid or oversized `snapshot_meta_column_names` values, and the reject-path cases in
+  dbt's own adapter test suite (this adapter does not implement those checks);
 * snapshotting through an ephemeral model, a view, a materialized view, or a partitioned
   source where only some partitions change;
 * switching an existing snapshot table between `check` and `timestamp`;

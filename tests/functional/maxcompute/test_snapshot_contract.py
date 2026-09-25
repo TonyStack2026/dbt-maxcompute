@@ -74,13 +74,18 @@ META_COLUMNS = """
 # --------------------------------------------------------------------------- #
 # reading the server back
 # --------------------------------------------------------------------------- #
-def _counts(project, snapshot_name):
-    """(total, current, closed_out) versions as the server sees them."""
+def _counts(project, snapshot_name, valid_to="dbt_valid_to", current_expr=None):
+    """(total, current, closed_out) versions as the server sees them.
+
+    `current_expr` is what makes a row the live version: `is null` by default, or
+    a sentinel comparison when the snapshot sets `dbt_valid_to_current`.
+    """
+    is_current = f"{valid_to} {current_expr or 'is null'}"
     row = project.run_sql(
         f"""
         select count(*),
-               sum(case when dbt_valid_to is null then 1 else 0 end),
-               sum(case when dbt_valid_to is not null then 1 else 0 end)
+               sum(case when {is_current} then 1 else 0 end),
+               sum(case when not ({is_current}) then 1 else 0 end)
         from {snapshot_name}
         """,
         fetch="one",
@@ -92,10 +97,11 @@ def _delta(before, after):
     return tuple(a - b for a, b in zip(after, before))
 
 
-def _ids(project, snapshot_name, current=True):
-    predicate = "is null" if current else "is not null"
+def _ids(project, snapshot_name, current=True, valid_to="dbt_valid_to", current_expr=None):
+    is_current = f"{valid_to} {current_expr or 'is null'}"
+    predicate = is_current if current else f"not ({is_current})"
     rows = project.run_sql(
-        f"select id from {snapshot_name} where dbt_valid_to {predicate} order by id",
+        f"select id from {snapshot_name} where {predicate} order by id",
         fetch="all",
     )
     return sorted(int(r[0]) for r in rows)
@@ -651,3 +657,202 @@ class TestSnapshotConfigKeysAreNotSilentlyDropped(BaseSnapshotCase):
                 "lifecycle on a snapshot table would expire history; if the "
                 "server now applies it, the docs and this case both change"
             )
+
+
+class TestSnapshotRenamedMetaColumns(BaseSnapshotCase):
+    """`snapshot_meta_column_names` renames the four dbt columns; everything
+    downstream (staging, merge, the target checks) has to follow the names."""
+
+    SNAPSHOT_RENAMED_SQL = (
+        "{% snapshot snap_renamed %}\n"
+        "{{ config(target_schema=schema, unique_key='id', strategy='timestamp', "
+        "updated_at='updated_at', snapshot_meta_column_names="
+        "{'dbt_scd_id': 'ver_id', 'dbt_updated_at': 'ver_updated_at', "
+        "'dbt_valid_from': 'ver_from', 'dbt_valid_to': 'ver_to'}) }}\n"
+        "select * from {{ ref('fact') }}\n"
+        "{% endsnapshot %}\n"
+    )
+
+    @pytest.fixture(scope="class")
+    def snapshots(self):
+        return {"snap_renamed.sql": self.SNAPSHOT_RENAMED_SQL}
+
+    def test_history_is_still_correct_under_other_names(self, project):
+        _snapshot(project, "snap_renamed")
+        shape = _table_shape(project, "snap_renamed")
+        first = _counts(project, "snap_renamed", valid_to="ver_to")
+        print(f"SERVER[renamed.first] counts={first} target={shape}")
+        assert first == (5, 5, 0)
+        assert {"ver_id", "ver_to", "ver_from", "ver_updated_at"} <= set(shape["columns"])
+        assert "dbt_scd_id" not in shape["columns"]
+
+        project.run_sql(
+            "update fact set amount = 321, "
+            "updated_at = CAST('2024-06-01 00:00:00' AS TIMESTAMP) where id = 2"
+        )
+        _snapshot(project, "snap_renamed")
+        after = _counts(project, "snap_renamed", valid_to="ver_to")
+        print(
+            f"SERVER[renamed.update] delta={_delta(first, after)} "
+            f"expired_ids={_ids(project, 'snap_renamed', False, valid_to='ver_to')}"
+        )
+        assert _delta(first, after) == (1, 0, 1)
+
+
+class TestSnapshotDbtValidToCurrent(BaseSnapshotCase):
+    """`dbt_valid_to_current`: the live version is a sentinel, not NULL.
+
+    dbt-core handles that in two places - it reads the live rows with
+    ``valid_to = <sentinel> or valid_to is null``, and it does the same in
+    ``default__snapshot_merge_sql``'s matched branch.  The MaxCompute merge macro
+    is an override, so the sentinel only works if the override carries the branch
+    too; without it nothing is ever matched and the expired version stays live
+    next to the new one.
+    """
+
+    # `to_timestamp('...')` is not valid MaxCompute (the server wants 2-3 args), so the
+    # sentinel is written as an explicit cast.
+    SENTINEL = "cast('9999-12-31 00:00:00' as timestamp)"
+
+    SNAPSHOT_VTC_SQL = """{% snapshot snap_vtc %}
+{{ config(target_schema=schema, unique_key='id', strategy='timestamp', updated_at='updated_at', dbt_valid_to_current="cast('9999-12-31 00:00:00' as timestamp)") }}
+select * from {{ ref('fact') }}
+{% endsnapshot %}
+"""
+
+    @pytest.fixture(scope="class")
+    def snapshots(self):
+        return {"snap_vtc.sql": self.SNAPSHOT_VTC_SQL}
+
+    def test_one_current_version_per_key_with_a_sentinel(self, project):
+        _snapshot(project, "snap_vtc")
+        current = f"= {self.SENTINEL}"
+        first = _counts(project, "snap_vtc", current_expr=current)
+        print(f"SERVER[valid_to_current.first] counts={first}")
+        assert (
+            first[0] == 5 and first[1] == 5
+        ), f"the first run should mark all five rows current by the sentinel: {first}"
+
+        project.run_sql(
+            "update fact set amount = 654, "
+            "updated_at = CAST('2024-07-01 00:00:00' AS TIMESTAMP) where id = 1"
+        )
+        _snapshot(project, "snap_vtc")
+        after = _counts(project, "snap_vtc", current_expr=current)
+        current_ids_for_one = project.run_sql(
+            f"select count(*) from snap_vtc where id = 1 and dbt_valid_to = {self.SENTINEL}",
+            fetch="one",
+        )[0]
+        print(
+            f"SERVER[valid_to_current.update] delta={_delta(first, after)} "
+            f"current_versions_of_id_1={current_ids_for_one} counts={after}"
+        )
+        assert int(current_ids_for_one) == 1, (
+            f"id 1 has {current_ids_for_one} current versions: the merge did not "
+            "recognise the sentinel, so the expired version was never closed out"
+        )
+        assert _delta(first, after) == (1, 0, 1)
+
+
+class TestSnapshotCompositeUniqueKey(BaseSnapshotCase):
+    """A list ``unique_key``, and what does and does not count as a change to it.
+
+    Measured with the staging helper columns filtered out (see the materialization):
+    the second run stops failing with ``dbt_unique_key_1 is ambiguous`` and the
+    snapshot table never grows helper columns.  Two semantics are pinned here, both
+    from the server's own rows:
+
+    * a non-key column change + newer ``updated_at`` expires the old version;
+    * a change **to a key column itself** is a different record - the old version
+      stays current (``delta (1, 1, 0)``), because the expiry join is on the key.
+      Snapshot history keys on identity, not on similarity.
+    """
+
+    SNAPSHOT_MULTIKEY_SQL = (
+        "{% snapshot snap_mk %}\n"
+        "{{ config(target_schema=schema, unique_key=['id', 'name'], "
+        "strategy='timestamp', updated_at='updated_at') }}\n"
+        "select * from {{ ref('fact') }}\n"
+        "{% endsnapshot %}\n"
+    )
+
+    @pytest.fixture(scope="class")
+    def snapshots(self):
+        return {"snap_mk.sql": self.SNAPSHOT_MULTIKEY_SQL}
+
+    def _helper_columns(self, project):
+        return [c for c in _table_shape(project, "snap_mk")["columns"] if "unique_key" in c]
+
+    def test_helper_columns_never_become_snapshot_columns(self, project):
+        _snapshot(project, "snap_mk")
+        first = _counts(project, "snap_mk")
+        print(
+            f"SERVER[composite_key.first] counts={first} helper_cols={self._helper_columns(project)}"
+        )
+        assert first == (5, 5, 0)
+        assert self._helper_columns(project) == []
+
+    def test_non_key_change_expires_the_old_version(self, project):
+        project.run_sql(
+            "update fact set amount = 777, "
+            "updated_at = CAST('2024-08-01 00:00:00' AS TIMESTAMP) where id = 1"
+        )
+        ok, message, _ = _try_snapshot("snap_mk")
+        after = _counts(project, "snap_mk") if ok else _counts(project, "snap_mk")
+        print(
+            f"SERVER[composite_key.non_key_change] succeeded={ok} counts={after} "
+            f"helper_cols={self._helper_columns(project)} msg={message[:200]}"
+        )
+        assert ok, f"a list unique_key must run: {message[:200]}"
+        assert (
+            after[0] == 6 and after[2] == 1
+        ), f"expected one expired version next to a new current one, got {after}"
+        assert self._helper_columns(project) == []
+
+    def test_changing_a_key_column_makes_a_new_record_not_a_new_version(self, project):
+        before = _counts(project, "snap_mk")
+        project.run_sql(
+            "update fact set name = 'Alice2', "
+            "updated_at = CAST('2024-08-02 00:00:00' AS TIMESTAMP) where id = 1"
+        )
+        _snapshot(project, "snap_mk")
+        after = _counts(project, "snap_mk")
+        print(
+            f"SERVER[composite_key.key_column_change] delta={_delta(before, after)} counts={after}"
+        )
+        assert _delta(before, after) == (1, 1, 0), (
+            "the key itself changed, so dbt treats it as a different record; the "
+            "previous version stays current - this is the documented cost of putting "
+            "a mutable column into unique_key"
+        )
+
+    def test_composite_key_as_one_expression_is_the_usable_form(self, project):
+        """The workaround dbt documents for composite keys, measured here.
+
+        A list `unique_key` makes dbt-core emit `dbt_unique_key_1/2` columns that
+        MaxCompute's analyser calls ambiguous (measured:
+        ``ODPS-0130071 ... dbt_unique_key_1 is ambiguous``).  Spelling the key as
+        one expression keeps a single `dbt_unique_key` and works.
+        """
+        body = (
+            "{% snapshot snap_mk_expr %}\n"
+            "{{ config(target_schema=schema, unique_key=\"concat(id, '|', name)\", "
+            "strategy='timestamp', updated_at='updated_at') }}\n"
+            "select * from {{ ref('fact') }}\n"
+            "{% endsnapshot %}\n"
+        )
+        directory = os.path.join(project.project_root, "snapshots")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "snap_mk_expr.sql"), "w") as handle:
+            handle.write(body)
+        _snapshot(project, "snap_mk_expr")
+        first = _counts(project, "snap_mk_expr")
+        print(f"SERVER[multi_key_expr.first] counts={first}")
+        assert first == (5, 5, 0)
+        project.run_sql(
+            "update fact set updated_at = CAST('2024-09-01 00:00:00' AS TIMESTAMP) where id = 4"
+        )
+        _snapshot(project, "snap_mk_expr")
+        after = _counts(project, "snap_mk_expr")
+        print(f"SERVER[multi_key_expr.update] delta={_delta(first, after)}")
+        assert _delta(first, after) == (1, 0, 1)
