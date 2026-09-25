@@ -856,3 +856,19 @@ class TestSnapshotCompositeUniqueKey(BaseSnapshotCase):
         after = _counts(project, "snap_mk_expr")
         print(f"SERVER[multi_key_expr.update] delta={_delta(first, after)}")
         assert _delta(first, after) == (1, 0, 1)
+
+    def test_a_table_polluted_by_an_older_run_is_refused_with_the_remedy(self, project):
+        """The pre-fix materialization could leave helper columns behind.
+
+        A table holding them can never be snapshotted again - the staging query
+        aliases the same names over `select *`, and MaxCompute answers with ten
+        ambiguous-column errors.  Say what to delete instead.
+        """
+        project.run_sql("alter table snap_mk add columns (dbt_unique_key_9 string)")
+        ok, message, _ = _try_snapshot("snap_mk")
+        print(f"SERVER[composite_key.leftover_guard] succeeded={ok} message={message[:300]}")
+        assert not ok, "a target with leftover staging columns must not run"
+        lowered = message.lower()
+        assert "dbt_unique_key_9" in lowered, message[:200]
+        assert "drop columns" in lowered, message[:200]
+        assert "odps-" not in lowered, f"opaque server error leaked: {message[:200]}"

@@ -67,6 +67,12 @@ of them needed a fix.
 | `dbt_valid_to_current` (a sentinel marks the live version instead of NULL) | **was silently wrong**: after an update, the changed key had two live versions and nothing was closed out | the merge macro here is an override, and it hard-coded `dbt_valid_to is null` in its matched branch.  It now mirrors dbt-core's `(dest.valid_to = <sentinel> or dest.valid_to is null)` |
 | `unique_key` as a list (composite key) | **used to die on the second run** with ten `column reference ... dbt_unique_key_1 is ambiguous` errors, after the first run had looked fine | the staging query's helper columns were filtered by exact name only, so `dbt_unique_key_1/2` got `alter table ... add columns`-ed into the snapshot table, and the next run aliased those names a second time over `select *`.  The filter now matches the name shape |
 
+A snapshot table that an **older** adapter version already polluted with those helper
+columns cannot be repaired by upgrading: every later run would keep failing with the same
+ambiguity.  Such a target is now refused up front, naming the columns to remove
+(`alter table ... drop columns`) - covered by
+`TestSnapshotCompositeUniqueKey::test_a_table_polluted_by_an_older_run_is_refused_with_the_remedy`.
+
 One composite-key behaviour is worth stating because it surprises people: changing a
 **key column itself** is a new record, not a new version - the previous version stays
 current (`+1` total, `+1` current), because the expiry join is on the key.  Putting a

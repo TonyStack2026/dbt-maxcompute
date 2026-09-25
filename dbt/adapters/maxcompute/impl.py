@@ -218,6 +218,26 @@ class MaxComputeAdapter(SQLAdapter):
         # all (measured on a live project).  A key on the snapshot's own version
         # id is harmless - that column is already unique per version - so only
         # the data-column case is refused.
+        # Leftover staging helper columns: the pre-fix materialization could add
+        # dbt_change_type / dbt_unique_key_1/2 to the snapshot table itself, and
+        # such a table can never be snapshotted again - the staging query aliases
+        # those same names over `select *` and MaxCompute refuses it as ambiguous.
+        # Refuse it with the one-line remedy instead of that error storm.
+        leftover = [
+            str(column.name)
+            for column in self.get_columns_in_relation(relation)
+            if str(column.name).lower() == "dbt_change_type"
+            or str(column.name).lower().startswith("dbt_unique_key")
+        ]
+        if leftover:
+            raise DbtRuntimeError(
+                f"Snapshot target {relation.render()} contains staging columns "
+                f"({', '.join(leftover)}), which an older version of this adapter "
+                "could add to a snapshot table. They make every later run fail with "
+                '"column ... is ambiguous" inside MaxCompute. Drop those columns '
+                "(`alter table ... drop columns`) or move the snapshot to a new "
+                "target; current versions no longer add them."
+            )
         primary_key = getattr(table, "primary_key", None) if table else None
         scd_id = (column_names or {}).get("dbt_scd_id", "dbt_scd_id").lower()
         colliding = [

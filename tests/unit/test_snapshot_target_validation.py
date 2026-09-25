@@ -133,3 +133,17 @@ def test_renamed_version_id_column_is_respected():
         ]
     )
     adapter.valid_snapshot_target(RELATION, column_names)
+
+
+def test_leftover_staging_columns_are_refused_with_the_remedy():
+    """A table an older adapter polluted can never be snapshotted again."""
+    adapter = _adapter(True)
+    adapter.get_columns_in_relation = lambda relation: _Columns(
+        SNAPSHOT_COLUMNS + ["dbt_unique_key_1", "dbt_unique_key_2"]
+    )
+    with pytest.raises(DbtRuntimeError) as error:
+        adapter.valid_snapshot_target(RELATION)
+    message = str(error.value).lower()
+    assert "dbt_unique_key_1" in message, "name the columns the user has to remove"
+    assert "drop columns" in message or "new" in message
+    assert "ambiguous" in message, "say what would otherwise keep happening"
