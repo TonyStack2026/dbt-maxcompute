@@ -10,7 +10,8 @@ live MaxCompute project can answer:
 * persisted docs - model and column comments read back through
   ``dbt docs generate``, which takes them from the server, not from the model
 * invalid SQL that must come back as an error instead of a green run
-* cleanup - every schema this module creates (prefix ``test``) is gone again
+* cleanup - every schema *this run* creates is gone again (checked against the
+  names this run recorded, not against every ``test*`` schema in the project)
 
 ``tests/functional/test_core.py`` stays the broader release-validation suite;
 this module is the subset to run on every change, so keep it small and keep the
@@ -24,7 +25,9 @@ so a run that never reached a server can never be read as an integration pass.
 
 import json
 from pathlib import Path
+from typing import List
 
+import maxcompute_gating
 import pytest
 from dbt.tests.util import check_relation_types, run_dbt
 
@@ -58,24 +61,47 @@ def statuses(results):
     return [str(result.status) for result in results]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def integration_environment_and_cleanup():
-    """Skip the module when no real run is possible; then verify schema cleanup.
+#: Every schema created by the classes in this module, in creation order.
+CREATED_SCHEMAS: List[str] = []
 
-    The cleanup check compares the ``test*`` schemas visible before and after
-    the module, so a leaked schema from an earlier crashed session cannot make
-    this assertion fail, and a schema this module leaves behind always does.
+
+@pytest.fixture(scope="class", autouse=True)
+def record_created_schema(project):
+    """Remember the schema this class created, for the cleanup check below.
+
+    Recorded twice on purpose: in-process for the assertion here, and into the
+    manifest named by ``DBT_INTEGRATION_SCHEMA_MANIFEST`` so the runner script -
+    a separate process - can verify the same set even if pytest is killed
+    halfway through.
     """
-    import maxcompute_gating
+    CREATED_SCHEMAS.append(project.test_schema)
+    maxcompute_gating.record_schema(project.test_schema)
+    yield
 
+
+@pytest.fixture(scope="module", autouse=True)
+def integration_environment_gate():
+    """Skip the module when no real run is possible; then verify our own cleanup.
+
+    The check is scoped to the schemas *this run* recorded, not to "every schema
+    whose name starts with ``test``".  A MaxCompute project is shared, so a
+    concurrent run - or any other ``test*`` schema appearing while we work - is
+    nobody's evidence of a leak.  Verified on 2026-09-26: a project-wide diff
+    reported the suite as failed (6 passed, 1 error) purely because an unrelated
+    ``test*`` schema was created mid-run.
+    """
     reason = maxcompute_gating.preflight_reason()
     if reason:
         pytest.skip(f"MaxCompute integration not run: {reason}")
 
-    before = set(maxcompute_gating.test_schemas())
     yield
-    leaked = sorted(set(maxcompute_gating.test_schemas()) - before)
-    assert not leaked, f"integration schemas were not cleaned up: {leaked}"
+    still_present = set(maxcompute_gating.existing_schemas())
+    leaked = sorted(schema for schema in CREATED_SCHEMAS if schema in still_present)
+    assert not leaked, (
+        f"schemas this run created were not dropped: {leaked}; "
+        "a leaked name means the previous class's teardown failed, and the next "
+        "run of this module would then be tested against leftover state"
+    )
 
 
 # ---------------------------------------------------------------------------

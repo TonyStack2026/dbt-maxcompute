@@ -20,7 +20,7 @@
 #
 # Exit status:
 #   0  cases ran on the server and all passed
-#   1  cases ran and at least one failed (including leftover test schemas)
+#   1  cases ran and at least one failed, or a schema this run created survived
 #   2  integration could not run: no credentials, two-tier project, or the
 #      project was unreachable. No evidence was produced.
 set -euo pipefail
@@ -92,17 +92,22 @@ fi
 # --------------------------------------------------------------------------
 # 1. resolve a profile
 # --------------------------------------------------------------------------
-TEMP_DIR=""
+TEMP_DIR="$(umask 077; mktemp -d)"
+# The suite appends every schema it creates to this file, so the cleanup check
+# below is about *this run*.  A MaxCompute project is shared: other runs' test*
+# schemas are not our leak, and our own leak must not hide among them.
+export DBT_INTEGRATION_SCHEMA_MANIFEST="${TEMP_DIR}/schemas.txt"
+: >"$DBT_INTEGRATION_SCHEMA_MANIFEST"
+
 cleanup() {
-  if [ -n "$TEMP_DIR" ]; then
-    rm -rf "$TEMP_DIR"
-  fi
+  rm -rf "$TEMP_DIR"
 }
-trap cleanup EXIT
+# HUP/INT/TERM as well as EXIT: a cancelled CI job or a Ctrl-C must not leave the
+# generated profile, the JUnit record or the schema manifest behind in /tmp.
+trap cleanup EXIT HUP INT TERM
 
 if [ -z "${DBT_PROFILE_PATH:-}" ] && [ ! -f "$REPO_ROOT/dbt_profile.yml" ]; then
   if [ -n "${MC_PROJECT:-}" ] && [ -n "${MC_ENDPOINT:-}" ]; then
-    TEMP_DIR="$(umask 077; mktemp -d)"
     AUTH_TYPE="chain"
     {
       echo "type: maxcompute"
@@ -111,8 +116,8 @@ if [ -z "${DBT_PROFILE_PATH:-}" ] && [ ! -f "$REPO_ROOT/dbt_profile.yml" ]; then
       echo "endpoint: ${MC_ENDPOINT}"
       echo "auth_type: ${AUTH_TYPE}"
       echo "threads: 4"
-    } >"$TEMP_DIR/dbt_profile.yml"
-    export DBT_PROFILE_PATH="$TEMP_DIR/dbt_profile.yml"
+    } >"${TEMP_DIR}/dbt_profile.yml"
+    export DBT_PROFILE_PATH="${TEMP_DIR}/dbt_profile.yml"
     echo "profile: generated a temp profile with auth_type=${AUTH_TYPE} (credentials stay in the environment)"
   fi
 fi
@@ -131,13 +136,11 @@ if ! REASON="$("$PYTHON" "$GATE" preflight 2>&1)"; then
   finish "BLOCKED - no evidence produced (preflight failed: ${REASON})" 2
 fi
 
-SCHEMAS_BEFORE="$(mktemp)"
-"$PYTHON" "$GATE" test-schemas >"$SCHEMAS_BEFORE" 2>/dev/null || true
-
 # --------------------------------------------------------------------------
 # 3. run the cases
 # --------------------------------------------------------------------------
-JUNIT_XML="$(mktemp)"
+# inside TEMP_DIR so the EXIT trap takes it with the profile and the manifest
+JUNIT_XML="${TEMP_DIR}/junit.xml"
 echo "suite:     ${SUITE} (pytest -m ${MARKER})"
 rc=0
 "$PYTHON" -m pytest \
@@ -187,15 +190,22 @@ fi
 # --------------------------------------------------------------------------
 # 5. cleanup check: schemas created by this run must be gone
 # --------------------------------------------------------------------------
-LEAKED=""
-if SCHEMAS_AFTER="$("$PYTHON" "$GATE" test-schemas 2>/dev/null)"; then
-  LEAKED="$(comm -13 <(sort "$SCHEMAS_BEFORE") <(printf '%s\n' "$SCHEMAS_AFTER" | sort) | grep -v '^$' || true)"
+RECORDED=0
+if [ -f "$DBT_INTEGRATION_SCHEMA_MANIFEST" ]; then
+  RECORDED="$(grep -c . "$DBT_INTEGRATION_SCHEMA_MANIFEST" || true)"
 fi
 
-if [ -n "$LEAKED" ]; then
-  finish "FAILED - test schemas left behind: $(printf '%s ' $LEAKED)" 1
+if [ "$RECORDED" = "0" ]; then
+  # Nothing recorded: the suite either skipped, or was run without this script.
+  echo "  cleanup: UNKNOWN - this run recorded no schemas (the suite's own assertion still applies)"
+elif LEAKED="$("$PYTHON" "$GATE" leftover-schemas 2>&1)"; then
+  if [ -n "$LEAKED" ]; then
+    finish "FAILED - schemas this run created are still present: $(printf '%s ' $LEAKED)" 1
+  fi
+  echo "  cleanup: ok (${RECORDED} schemas created by this run, all dropped)"
+else
+  echo "  cleanup: UNKNOWN - cannot list the project's schemas: $(printf '%s' "$LEAKED" | head -1)"
 fi
-echo "  cleanup: ok (no new test schemas remain in the project)"
 echo "  cases:   server-side assertions are listed under SERVER[...] in the run output"
 
 if [ "$rc" != "0" ]; then

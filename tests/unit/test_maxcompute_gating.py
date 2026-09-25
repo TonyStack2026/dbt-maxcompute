@@ -156,3 +156,49 @@ class TestPreflightReason:
 
         monkeypatch.setattr(maxcompute_gating, "odps_client", lambda *a, **k: OkClient())
         assert preflight_reason() is None
+
+
+class TestSchemaManifest:
+    """Cleanup has to be attributed to this run, not to the whole project."""
+
+    def test_recording_is_a_noop_without_a_manifest(self, monkeypatch):
+        monkeypatch.delenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, raising=False)
+        maxcompute_gating.record_schema("test_whatever")
+        assert maxcompute_gating.recorded_schemas() == []
+
+    def test_recording_appends_incrementally(self, tmp_path, monkeypatch):
+        manifest = tmp_path / "schemas.txt"
+        monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(manifest))
+        maxcompute_gating.record_schema("test_run_a")
+        maxcompute_gating.record_schema("test_run_b")
+        assert maxcompute_gating.recorded_schemas() == ["test_run_a", "test_run_b"]
+
+    def test_only_this_runs_schemas_count_as_leftovers(self, tmp_path, monkeypatch):
+        manifest = tmp_path / "schemas.txt"
+        monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(manifest))
+        maxcompute_gating.record_schema("test_run_mine")
+        maxcompute_gating.record_schema("test_run_dropped")
+        # someone else's schema appears while this run works; one of ours survived
+        monkeypatch.setattr(
+            maxcompute_gating,
+            "existing_schemas",
+            lambda: ["test_run_mine", "test_someone_elses_run", "default"],
+        )
+        assert maxcompute_gating.leftover_schemas() == ["test_run_mine"]
+
+    def test_a_foreign_schema_never_fails_the_run(self, tmp_path, monkeypatch):
+        manifest = tmp_path / "schemas.txt"
+        monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(manifest))
+        maxcompute_gating.record_schema("test_run_mine")
+        monkeypatch.setattr(
+            maxcompute_gating,
+            "existing_schemas",
+            lambda: ["default", "test_run_dropped", "test_concurrent_other"],
+        )
+        assert maxcompute_gating.leftover_schemas() == []
+
+    def test_nothing_recorded_means_unknown_not_clean(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(tmp_path / "absent.txt"))
+        monkeypatch.setattr(maxcompute_gating, "existing_schemas", lambda: ["test_foreign"])
+        assert maxcompute_gating.leftover_schemas() == []
+        assert maxcompute_gating.recorded_schemas() == []

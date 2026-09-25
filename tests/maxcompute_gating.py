@@ -24,7 +24,8 @@ Command line (used by the runner script)::
     python tests/maxcompute_gating.py blocked      # exit 1 and print why we cannot run
     python tests/maxcompute_gating.py preflight    # also probes the project over the network
     python tests/maxcompute_gating.py summary      # project / endpoint host / auth type
-    python tests/maxcompute_gating.py test-schemas # list leftover test schemas, one per line
+    python tests/maxcompute_gating.py test-schemas # list this project's test schemas
+    python tests/maxcompute_gating.py leftover     # only schemas this run recorded
 """
 
 from __future__ import annotations
@@ -57,6 +58,11 @@ CREDENTIAL_ENV_PAIRS = (
 REQUIRED_PROFILE_KEYS = ("type", "project", "endpoint")
 
 DOC_URL = "docs/integration-tests.md"
+
+#: Where the runner asks the suite to record every schema it creates.  Cleanup is
+#: then checked against *this run* instead of against "every schema in the project
+#: whose name starts with test", which another concurrent run would break.
+SCHEMA_MANIFEST_ENV = "DBT_INTEGRATION_SCHEMA_MANIFEST"
 
 
 def profile_path() -> Optional[Path]:
@@ -151,6 +157,49 @@ def odps_client(profile: Optional[Dict[str, Any]] = None):
     return ODPS(profile["access_key_id"], profile["access_key_secret"], **kwargs)
 
 
+def manifest_path() -> Optional[Path]:
+    """Where this run should record the schemas it creates (runner-provided)."""
+    configured = os.environ.get(SCHEMA_MANIFEST_ENV)
+    return Path(configured).expanduser() if configured else None
+
+
+def record_schema(name: str) -> None:
+    """Append one schema name this run just created; a no-op without a manifest.
+
+    The file is written incrementally so that a run killed half way still leaves a
+    record of what it had already created.
+    """
+    path = manifest_path()
+    if path is None:
+        return
+    with open(path, "a") as handle:
+        handle.write(name + "\n")
+
+
+def recorded_schemas() -> List[str]:
+    """Schema names this run claims to have created (empty when no manifest)."""
+    path = manifest_path()
+    if path is None or not path.is_file():
+        return []
+    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+
+
+def existing_schemas() -> List[str]:
+    """Every schema currently visible in the configured project."""
+    profile = load_profile()
+    client = odps_client(profile)
+    return [schema.name for schema in client.list_schemas(profile["project"])]
+
+
+def leftover_schemas(created: Optional[List[str]] = None) -> List[str]:
+    """Schemas *this run* created that are still present afterwards."""
+    created = created if created is not None else recorded_schemas()
+    if not created:
+        return []
+    still_there = set(existing_schemas())
+    return sorted(set(created) & still_there)
+
+
 @lru_cache(maxsize=1)
 def preflight_reason() -> Optional[str]:
     """:func:`blocked_reason` plus a one-time network probe of the project.
@@ -214,7 +263,23 @@ def main(argv: List[str]) -> int:
         print(summary())
         return 0
     elif command == "test-schemas":
+        reason = blocked_reason()
+        if reason:
+            print(f"cannot list schemas: {reason}", file=sys.stderr)
+            return 3
         for schema in test_schemas():
+            print(schema)
+        return 0
+    elif command == "leftover-schemas":
+        # An empty manifest means "cannot attribute", which the caller reports as
+        # unknown rather than as a cleanup failure - so it needs no profile.
+        created = recorded_schemas()
+        if created:
+            reason = blocked_reason()
+            if reason:
+                print(f"cannot check cleanup: {reason}", file=sys.stderr)
+                return 3
+        for schema in leftover_schemas(created):
             print(schema)
         return 0
     else:

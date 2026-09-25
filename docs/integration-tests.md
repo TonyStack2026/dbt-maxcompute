@@ -76,7 +76,7 @@ target:  project=... endpoint_host=... auth_type=chain schema_prefix=test*
 suite:     smoke (pytest -m integration_smoke)
 INTEGRATION RESULTS
   cases:   executed=6 passed=6 failed=0 errors=0 skipped=0
-  cleanup: ok (no new test schemas remain in the project)
+  cleanup: ok (6 schemas created by this run, all dropped)
   status:  PASSED (server-side evidence produced)
 ```
 
@@ -89,6 +89,15 @@ Exit codes:
 | 2 | **Blocked** - no credentials, a two-tier project, or the project was unreachable. Nothing reached a server, so this is never reported as a pass |
 
 Cases skipped because credentials are missing also make the script exit `2`.
+
+Cleanup is attributed, not guessed. The suite records every schema it creates
+into `DBT_INTEGRATION_SCHEMA_MANIFEST` (a file in the script's private temp
+dir, appended as each class starts), and both the in-test assertion and the
+script's check ask only about *those* names. Checking "did any `test*` schema
+appear while I was running" was the first version, and it is wrong on a shared
+project: measured on 2026-09-26, an unrelated `test*` schema created mid-run
+made a fully passing suite report `6 passed, 1 error` and exit `1`. If no names
+were recorded the script says `cleanup: UNKNOWN` instead of inventing a verdict.
 Running `pytest` directly is fine too: every case that needs a server is
 skipped with the reason computed by `tests/maxcompute_gating.py`.
 
