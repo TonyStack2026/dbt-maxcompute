@@ -109,10 +109,14 @@ and passed, and the run stayed red because the repository is broken. Before the
 change the same session reported `executed=1 passed=0` when nothing had run. A
 collection error can neither become a pass nor hide the cases that did run.
 
-Cleanup is attributed, not guessed. The suite records every schema it creates
-into `DBT_INTEGRATION_SCHEMA_MANIFEST` (a file in the script's private temp
+Cleanup is attributed, not guessed. An observer fixture
+(`tests/functional/conftest.py`) records the schema each test class is about to
+use into `DBT_INTEGRATION_SCHEMA_MANIFEST` (a file in the script's private temp
 dir, appended as each class starts), and both the in-test assertion and the
-script's check ask only about *those* names. Checking "did any `test*` schema
+script's check ask only about *those* names - which is why `--suite core` gets
+the same attribution as the minimal set. The observer depends on nothing but the
+schema name, so it cannot drag credentials or server state into a test that never
+asked for them. Checking "did any `test*` schema
 appear while I was running" was the first version, and it is wrong on a shared
 project: measured on 2026-09-26, an unrelated `test*` schema created mid-run
 made a fully passing suite report `6 passed, 1 error` and exit `1`. If no names

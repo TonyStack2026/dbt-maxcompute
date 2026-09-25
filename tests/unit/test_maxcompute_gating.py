@@ -173,6 +173,14 @@ class TestSchemaManifest:
         maxcompute_gating.record_schema("test_run_b")
         assert maxcompute_gating.recorded_schemas() == ["test_run_a", "test_run_b"]
 
+    def test_recording_is_idempotent(self, tmp_path, monkeypatch):
+        """The suite and the observer fixture see the same schema once."""
+        manifest = tmp_path / "schemas.txt"
+        monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(manifest))
+        maxcompute_gating.record_schema("test_run_a")
+        maxcompute_gating.record_schema("test_run_a")
+        assert maxcompute_gating.recorded_schemas() == ["test_run_a"]
+
     def test_only_this_runs_schemas_count_as_leftovers(self, tmp_path, monkeypatch):
         manifest = tmp_path / "schemas.txt"
         monkeypatch.setenv(maxcompute_gating.SCHEMA_MANIFEST_ENV, str(manifest))

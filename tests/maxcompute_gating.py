@@ -172,6 +172,11 @@ def record_schema(name: str) -> None:
     path = manifest_path()
     if path is None:
         return
+    already = recorded_schemas()
+    if name in already:
+        # both the suite's own recording and the observer fixture can see the
+        # same schema; the manifest is a set, not a log
+        return
     with open(path, "a") as handle:
         handle.write(name + "\n")
 
