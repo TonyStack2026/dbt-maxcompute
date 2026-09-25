@@ -58,7 +58,18 @@
     on DBT_INTERNAL_SOURCE.{{ columns.dbt_scd_id }} = DBT_INTERNAL_DEST.{{ columns.dbt_scd_id }}
 
     when matched
+     {%- if config.get("dbt_valid_to_current") %}
+     {#- With `dbt_valid_to_current` the live version is marked by that value, not
+         by NULL. dbt-core's default merge honours it; this override has to as
+         well, otherwise nothing ever matches and the expired version stays live
+         next to the new one (measured: after one update, id 1 had 2 current
+         versions and nothing was closed out). -#}
+     {%- set dest_valid_to = ("DBT_INTERNAL_DEST." ~ columns.dbt_valid_to) | trim %}
+     {%- set current_value = config.get("dbt_valid_to_current") | trim %}
+     and ( {{ equals(dest_valid_to, current_value) }} or {{ dest_valid_to }} is null )
+     {%- else %}
      and DBT_INTERNAL_DEST.{{ columns.dbt_valid_to }} is null
+     {%- endif %}
      and DBT_INTERNAL_SOURCE.dbt_change_type in ('update', 'delete')
         then update
         set DBT_INTERNAL_DEST.{{ columns.dbt_valid_to }} = DBT_INTERNAL_SOURCE.{{ columns.dbt_valid_to }}
@@ -81,9 +92,6 @@
 
   {%- set strategy_name = config.get('strategy') -%}
   {%- set unique_key = config.get('unique_key') %}
-  -- grab current tables grants config for comparision later on
-  {%- set grant_config = config.get('grants') -%}
-  {%- set tblproperties = config.get('tblproperties', none) -%}
 
   {#- Config keys the snapshot materialization does not apply.  Say so instead
       of staying quiet: the snapshot table dbt creates is always an
@@ -150,21 +158,28 @@
       {% do adapter.expand_target_column_types(from_relation=staging_table,
                                                to_relation=target_relation) %}
 
-      {% set missing_columns = adapter.get_missing_columns(staging_table, target_relation)
-                                   | rejectattr('name', 'equalto', 'dbt_change_type')
-                                   | rejectattr('name', 'equalto', 'DBT_CHANGE_TYPE')
-                                   | rejectattr('name', 'equalto', 'dbt_unique_key')
-                                   | rejectattr('name', 'equalto', 'DBT_UNIQUE_KEY')
-                                   | list %}
+      {#- The staging query's own helper columns must never become snapshot
+          columns: with a list `unique_key` they arrive as dbt_unique_key_1/2,
+          and a snapshot table that holds them makes the *next* staging query
+          ambiguous (each later run re-aliases the same names over `select *`).
+          `equalto` cannot express that, so filter by name shape here. -#}
+      {% set missing_columns = [] %}
+      {% for column in adapter.get_missing_columns(staging_table, target_relation) %}
+        {% set column_name = column.name | lower %}
+        {% if column_name != 'dbt_change_type' and not column_name.startswith('dbt_unique_key') %}
+          {% do missing_columns.append(column) %}
+        {% endif %}
+      {% endfor %}
 
       {% do create_columns(target_relation, missing_columns) %}
 
-      {% set source_columns = adapter.get_columns_in_relation(staging_table)
-                                   | rejectattr('name', 'equalto', 'dbt_change_type')
-                                   | rejectattr('name', 'equalto', 'DBT_CHANGE_TYPE')
-                                   | rejectattr('name', 'equalto', 'dbt_unique_key')
-                                   | rejectattr('name', 'equalto', 'DBT_UNIQUE_KEY')
-                                   | list %}
+      {% set source_columns = [] %}
+      {% for column in adapter.get_columns_in_relation(staging_table) %}
+        {% set column_name = column.name | lower %}
+        {% if column_name != 'dbt_change_type' and not column_name.startswith('dbt_unique_key') %}
+          {% do source_columns.append(column) %}
+        {% endif %}
+      {% endfor %}
 
       {% set quoted_source_columns = [] %}
       {% for column in source_columns %}
