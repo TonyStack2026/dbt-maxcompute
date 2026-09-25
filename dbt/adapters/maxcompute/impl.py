@@ -183,6 +183,53 @@ class MaxComputeAdapter(SQLAdapter):
         return AdapterResponse(_message="OK")
 
     @available.parse_none
+    def valid_snapshot_target(
+        self, relation: MaxComputeRelation, column_names: Optional[Dict[str, str]] = None
+    ) -> None:
+        """dbt calls this when the snapshot table already exists.
+
+        MaxCompute closes out an expired snapshot version with a ``merge into``,
+        and ``merge into`` only runs on a transactional table.  Checking the
+        table's own metadata here stops the run before the staging table is
+        built and names the property to change, instead of leaving the user
+        with a server error in the middle of the materialization.  See
+        ``docs/snapshot-support.md``.
+        """
+        super().valid_snapshot_target(relation, column_names)
+        table = self.get_odps_table_by_relation(relation)
+        # None means "this table's shape is not something we can read"
+        # (external table, view, older pyodps).  Unknown is not a reason to
+        # reject a target the user may well be able to snapshot.
+        transactional = getattr(table, "is_transactional", None) if table else None
+        if transactional is False:
+            raise DbtRuntimeError(
+                f"Snapshot target {relation.render()} is a non-transactional "
+                "MaxCompute table. dbt keeps snapshot history by merging "
+                "expired versions, and MERGE INTO only runs on transactional "
+                "tables, so this target cannot hold snapshot history. Drop it "
+                "and let dbt create the snapshot table (dbt creates it "
+                "transactional), or recreate it with "
+                'TBLPROPERTIES("transactional"="true").'
+            )
+        # A primary key on the target - i.e. a PK Delta table - collides with
+        # snapshot history: the expired version and the new current version of
+        # one unique key have to coexist, and an upsert-by-key merge replaces
+        # the row instead of adding the second version, which leaves the record
+        # with no current version at all (measured on a live project).
+        primary_key = getattr(table, "primary_key", None) if table else None
+        if primary_key:
+            raise DbtRuntimeError(
+                f"Snapshot target {relation.render()} has a primary key "
+                f"({', '.join(str(column) for column in primary_key)}). A "
+                "snapshot keeps the expired version and the current version of "
+                "one unique key side by side, which a primary key forbids: "
+                "MaxCompute merges by key and the record ends up with no "
+                "current version. Let dbt create the snapshot table (it "
+                "creates one without a primary key), or point the snapshot at "
+                "a different target with the 'to' config."
+            )
+
+    @available.parse_none
     def get_odps_table_by_relation(
         self, relation: MaxComputeRelation, retry_times=1
     ) -> Optional[odps.models.Table]:

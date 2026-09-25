@@ -85,6 +85,32 @@
   {%- set grant_config = config.get('grants') -%}
   {%- set tblproperties = config.get('tblproperties', none) -%}
 
+  {#- Config keys the snapshot materialization does not apply.  Say so instead
+      of staying quiet: the snapshot table dbt creates is always an
+      unpartitioned, transactional, primary-key-free table, because closing out
+      an expired version is a merge and a second version of the same unique key
+      must be allowed to coexist with the first. -#}
+  {%- set ignored_configs = [] -%}
+  {%- if config.get('partition_by') is not none -%}
+    {%- do ignored_configs.append('partition_by (a snapshot table is never partitioned: the merge that expires a version writes whole rows)') -%}
+  {%- endif -%}
+  {%- if config.get('primary_keys') or config.get('delta') -%}
+    {%- do ignored_configs.append('primary_keys/delta (a primary key would not allow the current and the expired version of one unique key side by side)') -%}
+  {%- endif -%}
+  {%- if config.get('transactional') is not none and not config.get('transactional') -%}
+    {%- do ignored_configs.append('transactional=false (a snapshot table has to be transactional to merge)') -%}
+  {%- endif -%}
+  {%- if config.get('lifecycle') is not none -%}
+    {%- do ignored_configs.append('lifecycle (not applied to a snapshot table: expiring rows out of a history table would delete history)') -%}
+  {%- endif -%}
+  {%- if ignored_configs | length > 0 -%}
+    {% do exceptions.warn(
+        "Snapshot '" ~ model.name ~ "' sets " ~ (ignored_configs | join('; '))
+        ~ "; the MaxCompute snapshot materialization does not apply them. "
+        ~ "See docs/snapshot-support.md."
+    ) %}
+  {%- endif -%}
+
   {% set target_relation_exists, target_relation = get_or_create_relation(
           database=model.database,
           schema=model.schema,
