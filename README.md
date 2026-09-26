@@ -402,7 +402,7 @@ Due to MaxCompute engine characteristics, the following limitations apply:
 | **No transaction support** | MaxCompute does not support traditional database transactions. `BEGIN`, `COMMIT`, and `ROLLBACK` operations are no-ops. |
 | **No index DDL** | MaxCompute has no `CREATE INDEX`. dbt accepts an `indexes:` config but the adapter never applies it, so models that rely on it get no index and no warning. |
 | **Incremental full refresh is not atomic** | `dbt run --full-refresh` on an incremental SQL model drops the existing table and rebuilds it in place, instead of building a scratch relation and renaming. A build that fails midway leaves the previous version gone. |
-
+| **Declared-width columns are not widened** | If an incremental or snapshot target declares `varchar(n)` / `char(n)`, MaxCompute casts an over-long incoming value down and truncates it silently: the run succeeds and the row lands without the extra characters. dbt-core's column-widening call does not help here -- `adapter.expand_target_column_types` reaches `maxcompute__alter_column_type`, which renders its `alter table` statement without submitting it, so the type is never changed. Use unbounded `string` for columns whose length can grow. |
 
 ## Developers Guide
 
