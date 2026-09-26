@@ -92,9 +92,9 @@ ODPS-0130221 ... Invalid number of arguments - function to_timestamp needs at le
 It now renders an explicit cast (`cast('<value>' as timestamp)`, with a date-only value
 padded to midnight, because the cast wants a full timestamp).  Measured both ways through a
 model that calls the macro: before, both forms errored with the message above
-(`raw/macro-probe-100933.sanitized.log`, round ended `1 failed, 7 warnings in 74.xx`);
+(`raw/macro-probe-100933.sanitized.log`, round ended `1 failed, 4 warnings in 12.19s`);
 after, `SERVER[snapshot_string_as_time.ts_full] status=success value=2024-01-01 00:00:00`
-and the date-only form the same (`raw/stime-fix2-101243.sanitized.log`, round ended
+and the date-only form the same (`raw/stime-fix2-101214.sanitized.log`, round ended
 `3 passed in 252.65s` - that round also re-ran the `dbt_valid_to_current` cases, still green).
 
 Note the difference with the dbt-core default, which this page otherwise mirrors: where a
