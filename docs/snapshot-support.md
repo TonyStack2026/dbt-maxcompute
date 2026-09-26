@@ -173,8 +173,24 @@ One consequence of that drift is now fixed, and it is worth stating what it cost
 The copy also keeps `create_table_as_internal(..., True, ...)` and the explicit
 `insert (...) values (...)` shape, which are genuinely MaxCompute-specific and stay.
 
-Worth a separate pass: re-diff the vendored snapshot macros against the dbt-core version this
-adapter supports, and keep only the parts that MaxCompute actually needs.
+The same comparison, done line by line, is also how a regression of our own making was caught:
+a cleanup edit in this repository deleted the materialization's `grant_config` and
+`tblproperties` assignments while leaving the statements that consume them.  Jinja reads an
+undefined name as falsy, so nothing failed - snapshot `grants` and `tblproperties` would simply
+have stopped being applied - and the live suite stayed green over that state.  Both assignments
+are back, and two guards keep them there:
+
+* `tests/unit/test_snapshot_macro_integrity.py` - the copied materialization must still assign
+  every variable it uses; the test was checked by deleting a line and watching it fail;
+* `TestSnapshotTablePropertiesReachTheServer` - behavioural: MaxCompute rejects an unknown table
+  property at parse time, so a snapshot configured with a bogus property must fail the run
+  (measured: `SERVER[tblproperties.reach_server] succeeded=False`), while
+  `tblproperties={'table.format.version': '2'}` still builds a working snapshot
+  (`counts=(5, 5, 0)`, transactional).  If the config were dropped, the first case would pass and
+  the second would be unverifiable.
+
+Whether `grants:` on a snapshot reaches MaxCompute is *not* verified here; the adapter's grants
+support is only partly exercised by `tests/functional/adapter/test_grants.py`.
 
 ## Reproduce
 
