@@ -159,9 +159,10 @@ Two of the fixtures had to be re-spelled, and both reasons were measured rather 
 documentation:
 
 * the source table is created `transactional`, because one case deletes a row from it - a `delete`
-  against a non-transactional table comes back as `ODPS-0130071 ... trying to delete from a
+  against a non-transactional table is refused with `ODPS-0130071 ... trying to delete from a
   non-transactional table is not allowed. Set tblproperties ("transactional" = "true") ...`, and
-  the same statement on a transactional table removes the row (2 rows left of 3);
+  the same statement against a transactional table works (2 of 3 rows left after deleting `id = 3`);
+  `ODPS-0130161`, mentioned below, is a *parse* error and belongs to the `INTEGER` case;
 * seed rows insert `cast('...' as timestamp)` - a bare string literal in a `timestamp` column is
   refused as an incompatible type.
 
