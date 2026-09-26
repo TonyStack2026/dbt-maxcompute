@@ -189,8 +189,22 @@ are back, and two guards keep them there:
   (`counts=(5, 5, 0)`, transactional).  If the config were dropped, the first case would pass and
   the second would be unverifiable.
 
-Whether `grants:` on a snapshot reaches MaxCompute is *not* verified here; the adapter's grants
-support is only partly exercised by `tests/functional/adapter/test_grants.py`.
+`grants:` on a snapshot is measured rather than assumed, and the two halves are worth keeping
+apart.  The materialization does submit the statement - after the merge it runs `should_revoke`
+and `apply_grants`, and a configured grant reaches the server as
+`grant select on table <snapshot> to USER <grantee>`.  MaxCompute does record what it accepts:
+granting `select` on a table to a user that exists in the project was accepted, and
+`show grants on table` read that privilege back for that principal.  Not measured here: the
+`revoke` half (when a grant config changes between runs), grants to roles rather than users, and
+privileges other than `select`.
+
+`tests/functional/adapter/test_grants.py::TestSnapshotGrants` fails against this test project for
+a reason that is the fixture, not the product: it grants to the `DBT_TEST_USER_1` principal
+hard-coded in that file; `list users` on this project returns six accounts and none of them is
+that principal, so the server refuses the statement with
+`InvalidParameter: the project does not support this account provider`.  So a red run of
+that case says nothing about snapshot grants - and the caveat runs the other way too, because a
+green suite is what let the dropped `grant_config` above slip through unnoticed.
 
 The rest of the snapshot overrides were compared against the same dbt-core version and are
 intentional, not drift: batched `alter table ... add columns (...)` in
