@@ -62,11 +62,15 @@ class TestSnapshot(BaseSimpleSnapshot):
         Show that all ids are current, but the last 10 reflect updates and the first 10 don't
         i.e. if the column is added, but not updated, the record doesn't reflect that it's updated
 
-        Same case as upstream with one difference: MaxCompute's
-        `alter table ... add columns` accepts no DEFAULT, so the column is added
-        plain.  This used to be the second of two copies of the case in this
-        class - the `varchar(200) default null` copy above shadowed nothing and
-        ran nothing, and read like extra coverage that did not exist.
+        Same case as upstream with one difference: upstream spells the definition
+        `varchar(200) default null`, and MaxCompute refuses to parse `DEFAULT NULL`
+        in an `add column`/`add columns` statement (ParseError, on plain and on
+        transactional tables alike).  A literal default (`default 'x'`) does parse -
+        measured 2026-09-26, which is why the ephemeral snapshot cases keep
+        upstream's own alter statement - so only the `null` form is replaced, and
+        the column is added plain.  This used to be the second of two copies of the
+        case in this class - the `varchar(200) default null` copy above shadowed
+        nothing and ran nothing, and read like extra coverage that did not exist.
         """
         self.add_fact_column("full_name", "varchar(200)")
         self.update_fact_records(
