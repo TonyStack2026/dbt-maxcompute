@@ -139,12 +139,36 @@ two table-type cases above are errors because continuing there produces a wrong 
 * two-tier projects (no schema) - every measurement ran on a three-tier project;
 * invalid or oversized `snapshot_meta_column_names` values, and the reject-path cases in
   dbt's own adapter test suite (this adapter does not implement those checks);
-* snapshotting through an ephemeral model, a view, a materialized view, or a partitioned
-  source where only some partitions change;
+* snapshotting through a view, a materialized view, or a partitioned source where only some
+  partitions change (an ephemeral *model* is now measured - see below);
 * switching an existing snapshot table between `check` and `timestamp`;
 * two `dbt snapshot` runs writing the same target at the same time;
-* `hard_deletes='new_record'` with `check_cols='all'`, and `dbt_is_deleted` cleanup
-  behaviour over long histories.
+* `dbt_is_deleted` cleanup behaviour over long histories (`new_record` combined with
+  `check_cols='all'` is now measured - see below).
+
+## Ephemeral models and `check_cols='all'` are measured
+
+Four cases from dbt's own adapter suite (`tests/functional/adapter/test_ephemeral_snapshot_hard_deletes.py`)
+snapshot an **ephemeral model** over a source table, which is the shape that had been listed as
+unverified.  All four pass on a live project - `4 passed, 20 warnings in 318.25s` - covering
+`check`/`check_cols='all'` with `hard_deletes='new_record'`, the `timestamp` strategy, a
+`check_cols` list that deliberately excludes a newly added source column, and a new column plus a
+hard delete in the same run.
+
+Two of the fixtures had to be re-spelled, and both reasons were measured rather than taken from
+documentation:
+
+* the source table is created `transactional`, because one case deletes a row from it - a `delete`
+  against a non-transactional table comes back as `ODPS-0130071 ... trying to delete from a
+  non-transactional table is not allowed. Set tblproperties ("transactional" = "true") ...`, and
+  the same statement on a transactional table removes the row (2 rows left of 3);
+* seed rows insert `cast('...' as timestamp)` - a bare string literal in a `timestamp` column is
+  refused as an incompatible type.
+
+Two things that look like dialect differences are not: `add column ... DEFAULT '<literal>'` parses
+fine here (so upstream's own schema-change statement is kept verbatim), and `INTEGER` is simply not
+a MaxCompute column type at all - `create table t (id INTEGER, ...)` fails on plain *and*
+transactional tables, while `INT` and `BIGINT` both work.
 
 ## Why those gaps existed: the snapshot macros are a copy of dbt-core's
 
