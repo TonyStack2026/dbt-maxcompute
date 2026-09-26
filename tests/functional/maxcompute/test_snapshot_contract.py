@@ -953,9 +953,11 @@ class TestSnapshotSwitchToNewRecordOnExistingTable(BaseSnapshotCase):
         # of `ODPS-0130071 ... column snapshotted_data.dbt_is_deleted cannot be
         # resolved`.  dbt-core's strategy-aware validator refuses the same situation by
         # name, so that is the contract asserted here: no server round-trip, no ODPS code.
-        assert not ok and "dbt_is_deleted" not in columns_after, (
-            f"unexpected outcome: ok={ok} columns={columns_after}"
-        )
+        assert (
+            not ok and "dbt_is_deleted" not in columns_after
+        ), f"unexpected outcome: ok={ok} columns={columns_after}"
         lowered = message.lower()
-        assert "dbt_is_deleted" in lowered, f"the message must name the missing column: {message[:200]}"
+        assert (
+            "dbt_is_deleted" in lowered
+        ), f"the message must name the missing column: {message[:200]}"
         assert "odps-" not in lowered, f"opaque server error leaked to the user: {message[:200]}"
