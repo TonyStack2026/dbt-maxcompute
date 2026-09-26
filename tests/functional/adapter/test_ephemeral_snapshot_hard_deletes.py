@@ -62,21 +62,25 @@ class EphemeralHardDeletesOnMaxCompute:
         return SOURCE_INSERT_SQL
 
 
-class TestSnapshotEphemeralHardDeletes(EphemeralHardDeletesOnMaxCompute,
-                                        BaseSnapshotEphemeralHardDeletes):
+class TestSnapshotEphemeralHardDeletes(
+    EphemeralHardDeletesOnMaxCompute, BaseSnapshotEphemeralHardDeletes
+):
     """check_cols='all' + hard_deletes='new_record' over an ephemeral model."""
 
 
-class TestSnapshotNewColumnTimestampStrategy(EphemeralHardDeletesOnMaxCompute,
-                                             BaseSnapshotNewColumnTimestampStrategy):
+class TestSnapshotNewColumnTimestampStrategy(
+    EphemeralHardDeletesOnMaxCompute, BaseSnapshotNewColumnTimestampStrategy
+):
     """timestamp strategy + hard_deletes='new_record' after a column appears in the source."""
 
 
-class TestSnapshotNewColumnSpecificCheckCols(EphemeralHardDeletesOnMaxCompute,
-                                             BaseSnapshotNewColumnSpecificCheckCols):
+class TestSnapshotNewColumnSpecificCheckCols(
+    EphemeralHardDeletesOnMaxCompute, BaseSnapshotNewColumnSpecificCheckCols
+):
     """a new column that is deliberately not in check_cols must not create a new version."""
 
 
-class TestSnapshotNewColumnWithDeletes(EphemeralHardDeletesOnMaxCompute,
-                                       BaseSnapshotNewColumnWithDeletes):
+class TestSnapshotNewColumnWithDeletes(
+    EphemeralHardDeletesOnMaxCompute, BaseSnapshotNewColumnWithDeletes
+):
     """a new column and a hard delete in the same run exercise the deletion_records CTE."""
