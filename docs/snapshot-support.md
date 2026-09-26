@@ -192,6 +192,16 @@ are back, and two guards keep them there:
 Whether `grants:` on a snapshot reaches MaxCompute is *not* verified here; the adapter's grants
 support is only partly exercised by `tests/functional/adapter/test_grants.py`.
 
+The rest of the snapshot overrides were compared against the same dbt-core version and are
+intentional, not drift: batched `alter table ... add columns (...)` in
+`maxcompute__create_columns` (core adds one column per statement; MaxCompute's syntax is the
+batched form), `maxcompute__post_snapshot` dropping the staging relation (there are no temp
+tables to auto-drop), `md5` over `coalesce(cast(<col> as string), '')` in
+`maxcompute__snapshot_hash_arguments` (core's `varchar` wording, same semantics here), and
+forcing the transactional flag in `build_snapshot_staging_table`.  `expanded_data_type`, which
+core uses in `create_columns`, is not overridden by this adapter, so it resolves to the same
+string `data_type` produces - no hidden difference there.
+
 ## Reproduce
 
 ```bash
