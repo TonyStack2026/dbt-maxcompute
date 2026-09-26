@@ -76,7 +76,14 @@
   {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
   {{ drop_relation_if_exists(preexisting_backup_relation) }}
 
-  {{ run_hooks(pre_hooks) }}
+  {#-- Two passes, as in dbt-core: hooks flagged `transaction: false` are  #}
+  {#-- selected by the first call only. Calling run_hooks() with its      #}
+  {#-- default argument silently dropped every such hook, including the   #}
+  {#-- before_begin() / after_commit() helpers. MaxCompute has no         #}
+  {#-- transactions (connections.begin()/commit() are no-ops), so the     #}
+  {#-- passes only fix ordering.                                          #}
+  {{ run_hooks(pre_hooks, inside_transaction=False) }}
+  {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
   {% if existing_relation is none %}
     {% if language == 'python' %}
@@ -226,7 +233,7 @@
 
   {% do persist_docs(target_relation, model) %}
 
-  {{ run_hooks(post_hooks) }}
+  {{ run_hooks(post_hooks, inside_transaction=True) }}
 
   {%- if did_python_full_refresh_swap -%}
     {{ drop_relation_if_exists(backup_relation) }}
@@ -235,6 +242,10 @@
   {%- if temp_relation_exists -%}
     {{ adapter.drop_relation(temp_relation) }}
   {%- endif -%}
+
+  {#-- Outside-transaction post hooks run last, after the scratch relations #}
+  {#-- are gone -- same position as dbt-core.                              #}
+  {{ run_hooks(post_hooks, inside_transaction=False) }}
 
   {{ return({'relations': [target_relation]}) }}
 {%- endmaterialization %}
