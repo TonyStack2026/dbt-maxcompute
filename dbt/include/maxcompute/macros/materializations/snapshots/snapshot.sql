@@ -8,8 +8,21 @@
 
 
 -- dbt-adapters/dbt/include/global_project/macros/materializations/snapshots/strategies.sql
+{#- Measured: `to_timestamp('<x>')` does not exist on MaxCompute - the server answers
+    "ODPS-0130221 ... function to_timestamp needs at least 2, at most 3 parameters,
+    actually have 1" - so a custom snapshot strategy that rendered a timestamp through
+    this macro got an unusable statement.  An explicit cast is the form the live suite
+    already uses elsewhere, and it accepts both '2024-01-01' and a full
+    '2024-01-01 00:00:00'. -#}
 {% macro maxcompute__snapshot_string_as_time(timestamp) -%}
-    {%- set result = "to_timestamp('" ~ timestamp ~ "')" -%}
+    {#- `timestamp` arrives unquoted (it is the macro argument), so the literal has to
+        be re-quoted here or the cast would be applied to an arithmetic expression. -#}
+    {%- set literal = "'" ~ timestamp ~ "'" -%}
+    {%- if (timestamp | length) == 10 -%}
+        {#- date-only literal: MaxCompute's cast wants a full timestamp -#}
+        {%- set literal = "'" ~ timestamp ~ " 00:00:00'" -%}
+    {%- endif -%}
+    {%- set result = "cast(" ~ literal ~ " as timestamp)" -%}
     {{ return(result) }}
 {%- endmacro %}
 

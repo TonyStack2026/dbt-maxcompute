@@ -79,6 +79,28 @@ current (`+1` total, `+1` current), because the expiry join is on the key.  Putt
 mutable column into `unique_key` opts into that.
 `TestSnapshotCompositeUniqueKey` pins all three numbers.
 
+### `snapshot_string_as_time` rendered SQL MaxCompute rejects
+
+Nothing in dbt-core calls this macro, so a broken implementation is invisible until a custom
+snapshot strategy uses it - which is exactly how it stayed broken here.  It rendered
+`to_timestamp('<value>')`, and MaxCompute has no one-argument form:
+
+```
+ODPS-0130221 ... Invalid number of arguments - function to_timestamp needs at least 2, at most 3 parameters, actually have 1
+```
+
+It now renders an explicit cast (`cast('<value>' as timestamp)`, with a date-only value
+padded to midnight, because the cast wants a full timestamp).  Measured both ways through a
+model that calls the macro: before, both forms errored with the message above
+(`raw/macro-probe-100933.sanitized.log`, round ended `1 failed, 7 warnings in 74.xx`);
+after, `SERVER[snapshot_string_as_time.ts_full] status=success value=2024-01-01 00:00:00`
+and the date-only form the same (`raw/stime-fix2-101243.sanitized.log`, round ended
+`3 passed in 252.65s` - that round also re-ran the `dbt_valid_to_current` cases, still green).
+
+Note the difference with the dbt-core default, which this page otherwise mirrors: where a
+value is *written* into the snapshot table, dbt uses the adapter's own rendering, so the cast
+form above is what a MaxCompute snapshot table stores.
+
 ## Target table types
 
 | snapshot table | measured result |

@@ -961,3 +961,36 @@ class TestSnapshotSwitchToNewRecordOnExistingTable(BaseSnapshotCase):
             "dbt_is_deleted" in lowered
         ), f"the message must name the missing column: {message[:200]}"
         assert "odps-" not in lowered, f"opaque server error leaked to the user: {message[:200]}"
+
+
+class TestSnapshotStringAsTimeMacro:
+    """``snapshot_string_as_time`` is dispatchable but nothing in dbt-core calls it,
+
+    so a wrong implementation sits there until a user writes a custom strategy that
+    needs it.  Measured on MaxCompute: the one-argument ``to_timestamp('...')`` form is
+    not valid SQL here (``ODPS-0130221 ... function to_timestamp needs at least 2, at
+    most 3 parameters, actually have 1``), so the macro has to render something the
+    server accepts, for both a full timestamp string and a date-only one.
+    """
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "ts_full.sql": (
+                'select {{ snapshot_string_as_time("2024-01-01 00:00:00") }} as ts, ' "1 as id\n"
+            ),
+            "ts_date.sql": ('select {{ snapshot_string_as_time("2024-01-01") }} as ts, 1 as id\n'),
+        }
+
+    def test_renders_sql_the_server_accepts(self, project):
+        results = run_dbt(["run"], expect_pass=None)
+        failures = [r for r in results.results if _node_status(r) != "success"]
+        for r in results.results:
+            value = None
+            if _node_status(r) == "success":
+                name = r.node.name
+                value = project.run_sql(f"select ts from {name}", fetch="one")[0]
+            print(
+                f"SERVER[snapshot_string_as_time.{r.node.name}] status={_node_status(r)} value={value}"
+            )
+        assert not failures, f"the macro produced unusable SQL: {failures[0].message[:300]}"
