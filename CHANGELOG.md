@@ -20,12 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/integration-tests.md` covers local and CI runs, including the
   three-tier (schema-enabled) project requirement and `auth_type: chain` for
   keeping access keys out of files.
+- New `catalog_strict_metadata` profile option (default `false`). When enabled,
+  `dbt docs generate` fails if a relation listed for the catalog stays unreadable
+  after the metadata retries; dbt-core records the failure in `catalog.json`
+  `errors`, making the gap visible to consumers of the artifact.
 
 ### Fixed
 
 - Functional tests without credentials are now reported as *skipped* with the
   reason, instead of failing with a missing-file error inside the profile
   fixture.
+- `dbt docs generate` no longer drops unreadable relations from `catalog.json`
+  without naming them. Each skipped relation is now listed in a single warning
+  that explains the gap and how to opt into strict mode.
+- `get_odps_table_by_relation` retries now also cover `NoSuchObject` raised by the
+  metadata lookup itself, not only by reloading the returned object.
+
 
 ## [1.11.3b3] — 2026-08-26
 
