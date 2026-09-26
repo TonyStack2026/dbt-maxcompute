@@ -36,14 +36,21 @@ class _Columns:
         return iter(SimpleNamespace(name=name) for name in self._names)
 
 
-def _adapter(transactional, primary_key=None):
+def _adapter(transactional, primary_key=None, columns_for_table=None):
     """An adapter whose only server interaction is a table we describe."""
+    columns_for_table = columns_for_table if columns_for_table is not None else SNAPSHOT_COLUMNS
     adapter = MaxComputeAdapter.__new__(MaxComputeAdapter)
     adapter.get_columns_in_relation = lambda relation: _Columns(SNAPSHOT_COLUMNS)
     if transactional is _MISSING:
         table = object()
     else:
-        table = SimpleNamespace(is_transactional=transactional, primary_key=primary_key or [])
+        table = SimpleNamespace(
+            is_transactional=transactional,
+            primary_key=primary_key or [],
+            table_schema=SimpleNamespace(
+                columns=[SimpleNamespace(name=name) for name in columns_for_table]
+            ),
+        )
     adapter.get_odps_table_by_relation = lambda relation, retry_times=1: table
     return adapter
 
@@ -137,9 +144,8 @@ def test_renamed_version_id_column_is_respected():
 
 def test_leftover_staging_columns_are_refused_with_the_remedy():
     """A table an older adapter polluted can never be snapshotted again."""
-    adapter = _adapter(True)
-    adapter.get_columns_in_relation = lambda relation: _Columns(
-        SNAPSHOT_COLUMNS + ["dbt_unique_key_1", "dbt_unique_key_2"]
+    adapter = _adapter(
+        True, columns_for_table=SNAPSHOT_COLUMNS + ["dbt_unique_key_1", "dbt_unique_key_2"]
     )
     with pytest.raises(DbtRuntimeError) as error:
         adapter.valid_snapshot_target(RELATION)

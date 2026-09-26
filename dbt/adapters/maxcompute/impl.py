@@ -223,9 +223,12 @@ class MaxComputeAdapter(SQLAdapter):
         # such a table can never be snapshotted again - the staging query aliases
         # those same names over `select *` and MaxCompute refuses it as ambiguous.
         # Refuse it with the one-line remedy instead of that error storm.
+        # One metadata read: the table object we already fetched carries the
+        # columns, so the leftover check does not need a second query.
+        table_columns = getattr(getattr(table, "table_schema", None), "columns", None) or []
         leftover = [
             str(column.name)
-            for column in self.get_columns_in_relation(relation)
+            for column in table_columns
             if str(column.name).lower() == "dbt_change_type"
             or str(column.name).lower().startswith("dbt_unique_key")
         ]
