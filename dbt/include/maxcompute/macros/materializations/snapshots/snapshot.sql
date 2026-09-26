@@ -149,7 +149,13 @@
 
       {% set columns = config.get("snapshot_table_column_names") or get_snapshot_table_column_names() %}
 
-      {{ adapter.valid_snapshot_target(target_relation, columns) }}
+      {#- dbt-core's newer entry point: it runs the adapter's own
+          `valid_snapshot_target` (including the MaxCompute shape checks below) and
+          then the strategy-specific one - a `hard_deletes='new_record'` snapshot
+          against a table without `dbt_is_deleted` used to reach the server and come
+          back as six copies of "column snapshotted_data.dbt_is_deleted cannot be
+          resolved" (measured).  Core refuses that up front, by name. -#}
+      {{ adapter.assert_valid_snapshot_target_given_strategy(target_relation, columns, strategy) }}
 
       {% set build_or_select_sql = snapshot_staging_table(strategy, sql, target_relation) %}
       {% set staging_table = build_snapshot_staging_table(strategy, sql, target_relation, tblproperties) %}

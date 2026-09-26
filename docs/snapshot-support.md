@@ -124,6 +124,36 @@ two table-type cases above are errors because continuing there produces a wrong 
 * `hard_deletes='new_record'` with `check_cols='all'`, and `dbt_is_deleted` cleanup
   behaviour over long histories.
 
+## Why those gaps existed: the snapshot macros are a copy of dbt-core's
+
+`dbt/include/maxcompute/macros/materializations/snapshots/snapshot.sql` starts with a
+comment saying it is a copy of dbt-core's files ("only change varchar to string,
+dbt-adapters/dbt/include/global_project/macros/materializations/snapshots/strategies.sql").
+Both bugs above came from that copy having fallen behind core, not from MaxCompute:
+
+* core's `default__snapshot_merge_sql` grew a `dbt_valid_to_current` branch in its matched
+  condition; the copied override never got it.
+* core's materialization builds its excluded-column list as
+  `['dbt_change_type', 'DBT_CHANGE_TYPE', 'dbt_unique_key', 'DBT_UNIQUE_KEY']` **plus**
+  `dbt_unique_key_<n>` for each element of a list `unique_key`; the copy kept only the four
+  exact names, so the numbered columns leaked into the snapshot table.
+
+One consequence of that drift is now fixed, and it is worth stating what it cost before:
+
+* the materialization called `adapter.valid_snapshot_target(relation, columns)` while core calls
+  `adapter.assert_valid_snapshot_target_given_strategy(relation, columns, strategy)`, which adds
+  a strategy-specific check.  Turning on `hard_deletes='new_record'` for a snapshot table that
+  has no `dbt_is_deleted` column therefore reached the server and came back with six copies of
+  `ODPS-0130071 ... column snapshotted_data.dbt_is_deleted cannot be resolved`.  Calling core's
+  entry point refuses the same situation before submitting anything, naming the column - and the
+  adapter's own shape checks still run, because core's helper calls `valid_snapshot_target` first.
+
+The copy also keeps `create_table_as_internal(..., True, ...)` and the explicit
+`insert (...) values (...)` shape, which are genuinely MaxCompute-specific and stay.
+
+Worth a separate pass: re-diff the vendored snapshot macros against the dbt-core version this
+adapter supports, and keep only the parts that MaxCompute actually needs.
+
 ## Reproduce
 
 ```bash

@@ -753,6 +753,40 @@ select * from {{ ref('fact') }}
         )
         assert _delta(first, after) == (1, 0, 1)
 
+    def test_second_update_and_rerun_keep_one_current_version(self, project):
+        """The sentinel branch has to stay correct over repeated runs.
+
+        A second key changing, then a no-op run: each key keeps exactly one live
+        version, and rows already expired with a real timestamp are not treated
+        as live (which is what a `= <sentinel>` check that forgot the NULL case
+        would break).
+        """
+        current = f"= {self.SENTINEL}"
+        before = _counts(project, "snap_vtc", current_expr=current)
+        project.run_sql(
+            "update fact set amount = 666, "
+            "updated_at = CAST('2024-07-02 00:00:00' AS TIMESTAMP) where id = 2"
+        )
+        _snapshot(project, "snap_vtc")
+        after_update = _counts(project, "snap_vtc", current_expr=current)
+        _snapshot(project, "snap_vtc")
+        after_rerun = _counts(project, "snap_vtc", current_expr=current)
+        print(
+            f"SERVER[valid_to_current.second] from={before} after_update={after_update} "
+            f"after_noop_rerun={after_rerun}"
+        )
+        assert _delta(before, after_update) == (1, 0, 1)
+        assert _delta(after_update, after_rerun) == (0, 0, 0)
+        duplicated = project.run_sql(
+            f"""
+            select id, count(*) from snap_vtc
+            where dbt_valid_to = {self.SENTINEL}
+            group by id having count(*) > 1
+            """,
+            fetch="all",
+        )
+        assert duplicated == [], f"keys left with two live versions: {duplicated}"
+
 
 class TestSnapshotCompositeUniqueKey(BaseSnapshotCase):
     """A list ``unique_key``, and what does and does not count as a change to it.
@@ -872,3 +906,56 @@ class TestSnapshotCompositeUniqueKey(BaseSnapshotCase):
         assert "dbt_unique_key_9" in lowered, message[:200]
         assert "drop columns" in lowered, message[:200]
         assert "odps-" not in lowered, f"opaque server error leaked: {message[:200]}"
+
+
+class TestSnapshotSwitchToNewRecordOnExistingTable(BaseSnapshotCase):
+    """Turning on ``hard_deletes='new_record'`` for a table that has no
+    ``dbt_is_deleted`` column yet.
+
+    dbt-core's ``assert_valid_snapshot_target_given_strategy`` refuses this with a
+    "not a snapshot table" error naming the missing column.  This adapter's
+    materialization still calls the older ``valid_snapshot_target``, so the case is
+    decided here by measurement rather than by copying core: the materialization adds
+    missing columns from the staging query, which may make the switch work instead.
+    """
+
+    def _write(self, project, extra_config):
+        directory = os.path.join(project.project_root, "snapshots")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "snap_switch.sql"), "w") as handle:
+            handle.write(
+                "{% snapshot snap_switch %}\n"
+                "{{ config(target_schema=schema, unique_key='id', strategy='timestamp', "
+                "updated_at='updated_at'"
+                + (", " + extra_config if extra_config else "")
+                + ") }}\n"
+                "select * from {{ ref('fact') }}\n"
+                "{% endsnapshot %}\n"
+            )
+
+    def test_the_switch_keeps_history_or_says_why_not(self, project):
+        self._write(project, "")
+        _snapshot(project, "snap_switch")
+        before = _counts(project, "snap_switch")
+        columns_before = _table_shape(project, "snap_switch")["columns"]
+        print(f"SERVER[switch_new_record.before] counts={before} columns={columns_before}")
+        assert "dbt_is_deleted" not in columns_before
+
+        self._write(project, "hard_deletes='new_record'")
+        ok, message, _ = _try_snapshot("snap_switch")
+        columns_after = _table_shape(project, "snap_switch")["columns"]
+        after = _counts(project, "snap_switch") if ok else before
+        print(
+            f"SERVER[switch_new_record.after] succeeded={ok} delta={_delta(before, after)} "
+            f"has_dbt_is_deleted={'dbt_is_deleted' in columns_after} message={message[:250]}"
+        )
+        # Measured with the older validator, this failed *after* submitting: six lines
+        # of `ODPS-0130071 ... column snapshotted_data.dbt_is_deleted cannot be
+        # resolved`.  dbt-core's strategy-aware validator refuses the same situation by
+        # name, so that is the contract asserted here: no server round-trip, no ODPS code.
+        assert not ok and "dbt_is_deleted" not in columns_after, (
+            f"unexpected outcome: ok={ok} columns={columns_after}"
+        )
+        lowered = message.lower()
+        assert "dbt_is_deleted" in lowered, f"the message must name the missing column: {message[:200]}"
+        assert "odps-" not in lowered, f"opaque server error leaked to the user: {message[:200]}"
