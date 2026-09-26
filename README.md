@@ -153,6 +153,32 @@ odps.table.append2.enable": "true"
 ```
 You can override these defaults by specifying your own `sql_hints` use model config. Your custom hints will be merged with the defaults — you do not need to repeat the entire list unless you want to change specific values.
 
+### Model Hooks
+
+`pre-hook` and `post-hook` statements run as ordinary MaxCompute SQL jobs.
+MaxCompute has no transactions, so a hook's `transaction` flag does not open or
+close one -- it decides the order the hooks run in, exactly as on other adapters:
+`transaction: false` pre-hooks run before the rest, and `transaction: false`
+post-hooks run after them, once the scratch relations are gone.
+
+```yaml
+models:
+  my_project:
+    pre-hook:
+      - sql: "insert into dbt_hook_audit values ('first, outside')"
+        transaction: false
+      - "insert into dbt_hook_audit values ('then, inside')"
+    post-hook:
+      - "insert into dbt_hook_audit values ('first, inside')"
+      - sql: "insert into dbt_hook_audit values ('last, outside')"
+        transaction: false
+```
+
+dbt-core's `before_begin()` / `in_transaction()` / `after_commit()` helper macros
+produce the same shape and behave the same way here. A hook is only visible to
+later statements once its own job finishes -- there is no rollback point, so a
+failing model leaves whatever its earlier hooks already wrote.
+
 ### MaxQA (Interactive Query Acceleration)
 
 MaxQA (MCQA V2) is MaxCompute's interactive query acceleration engine. It provides significantly faster execution for suitable workloads — queries that take 30+ seconds in offline mode can often complete in under 5 seconds with MaxQA.
@@ -374,6 +400,8 @@ Due to MaxCompute engine characteristics, the following limitations apply:
 |------------|-------------|
 | **No rowcount support** | MaxCompute does not return the number of affected rows after DML operations. The `rows_affected` field in adapter responses will not be available. |
 | **No transaction support** | MaxCompute does not support traditional database transactions. `BEGIN`, `COMMIT`, and `ROLLBACK` operations are no-ops. |
+| **No index DDL** | MaxCompute has no `CREATE INDEX`. dbt accepts an `indexes:` config but the adapter never applies it, so models that rely on it get no index and no warning. |
+| **Incremental full refresh is not atomic** | `dbt run --full-refresh` on an incremental SQL model drops the existing table and rebuilds it in place, instead of building a scratch relation and renaming. A build that fails midway leaves the previous version gone. |
 
 
 ## Developers Guide
