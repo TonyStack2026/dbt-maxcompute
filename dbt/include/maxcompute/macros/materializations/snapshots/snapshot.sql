@@ -105,6 +105,9 @@
 
   {%- set strategy_name = config.get('strategy') -%}
   {%- set unique_key = config.get('unique_key') %}
+  -- grab current tables grants config for comparision later on
+  {%- set grant_config = config.get('grants') -%}
+  {%- set tblproperties = config.get('tblproperties', none) -%}
 
   {#- Config keys the snapshot materialization does not apply.  Say so instead
       of staying quiet: the snapshot table dbt creates is always an

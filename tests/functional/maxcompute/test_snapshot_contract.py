@@ -994,3 +994,37 @@ class TestSnapshotStringAsTimeMacro:
                 f"SERVER[snapshot_string_as_time.{r.node.name}] status={_node_status(r)} value={value}"
             )
         assert not failures, f"the macro produced unusable SQL: {failures[0].message[:300]}"
+
+
+class TestSnapshotTablePropertiesReachTheServer(BaseSnapshotCase):
+    """`tblproperties` has to survive into the created snapshot table.
+
+    Measured on this project: MaxCompute refuses an unknown table property at
+    parse time (``create table ... tblproperties("totally.bogus.prop"="1")`` →
+    ``ODPS-0130071/ParseError``), so a snapshot carrying a bogus key is an
+    observable probe.  If the materialization ever stops passing the config
+    through - which is exactly what a cleanup edit in this repository did once,
+    deleting the ``{%- set tblproperties = config.get(...) -%}`` line while the
+    two statements below kept using it - the run would succeed instead of
+    failing, and the user's table properties would be dropped in silence.
+    """
+
+    def test_bogus_property_fails_because_the_server_sees_it(self, project):
+        _write_snapshot_file(project, "snap_prop", "tblproperties={'totally.bogus.prop': '1'}")
+        ok, message, _ = _try_snapshot("snap_prop")
+        print(f"SERVER[tblproperties.reach_server] succeeded={ok} message={message[:220]}")
+        assert not ok, (
+            "the snapshot was created even though the server rejects that table "
+            "property: the config never reached the DDL"
+        )
+
+    def test_valid_append2_property_still_builds_a_working_snapshot(self, project):
+        _write_snapshot_file(project, "snap_a2ok", "tblproperties={'table.format.version': '2'}")
+        _snapshot(project, "snap_a2ok")
+        counts = _counts(project, "snap_a2ok")
+        shape = _table_shape(project, "snap_a2ok")
+        print(
+            f"SERVER[tblproperties.append2_ok] counts={counts} transactional={shape['transactional']}"
+        )
+        assert counts == (5, 5, 0)
+        assert shape["transactional"] is True
