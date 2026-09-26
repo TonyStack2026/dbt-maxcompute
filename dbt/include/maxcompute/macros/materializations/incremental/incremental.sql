@@ -76,12 +76,12 @@
   {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
   {{ drop_relation_if_exists(preexisting_backup_relation) }}
 
-  {#-- Two passes, as in dbt-core: hooks flagged `transaction: false` are  #}
-  {#-- selected by the first call only. Calling run_hooks() with its      #}
-  {#-- default argument silently dropped every such hook, including the   #}
-  {#-- before_begin() / after_commit() helpers. MaxCompute has no         #}
-  {#-- transactions (connections.begin()/commit() are no-ops), so the     #}
-  {#-- passes only fix ordering.                                          #}
+  {#-- Two passes per phase, as in dbt-core: run_hooks() keeps only the hooks #}
+  {#-- whose `transaction` flag matches the pass, so calling it once with its #}
+  {#-- default argument skipped every `transaction: false` hook -- which is   #}
+  {#-- what core's before_begin() and after_commit() helpers produce.         #}
+  {#-- MaxCompute has no transactions (connections.begin()/commit() are       #}
+  {#-- no-ops), so the two passes pick hooks and fix their order only.        #}
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
