@@ -76,7 +76,9 @@ def _build_adapter(monkeypatch, client, sleep_records, strict=None):
     adapter.get_odps_client = lambda: client
     monkeypatch.setattr(mc_impl.time, "sleep", lambda seconds: sleep_records.append(seconds))
     if strict is not None:
-        adapter.config = SimpleNamespace(credentials=SimpleNamespace(catalog_strict_metadata=strict))
+        adapter.config = SimpleNamespace(
+            credentials=SimpleNamespace(catalog_strict_metadata=strict)
+        )
     return adapter
 
 
@@ -150,8 +152,10 @@ def test_wrapped_internal_error_is_not_silent(monkeypatch):
     class BoomODPS(FakeODPS):
         def get_table(self, name, project=None, schema=None):
             if name == "gone":
-                raise ODPSError("ODPS-0110061 InvalidParameter: "
-                                "NoSuchObjectException cannot be cast to java.lang.RuntimeException")
+                raise ODPSError(
+                    "ODPS-0110061 InvalidParameter: "
+                    "NoSuchObjectException cannot be cast to java.lang.RuntimeException"
+                )
             return self._tables[name]
 
     tables = {"readable": FakeTable("readable"), "gone": None}
@@ -163,8 +167,16 @@ def test_wrapped_internal_error_is_not_silent(monkeypatch):
 
 
 def test_profile_field_parses_into_credentials():
-    base = {"type": "maxcompute", "project": "p", "schema": "s",
-            "endpoint": "http://service.example.com/api"}
-    assert MaxComputeCredentials.from_dict(
-        dict(base, catalog_strict_metadata=True)).catalog_strict_metadata is True
+    base = {
+        "type": "maxcompute",
+        "project": "p",
+        "schema": "s",
+        "endpoint": "http://service.example.com/api",
+    }
+    assert (
+        MaxComputeCredentials.from_dict(
+            dict(base, catalog_strict_metadata=True)
+        ).catalog_strict_metadata
+        is True
+    )
     assert MaxComputeCredentials.from_dict(base).catalog_strict_metadata is False
