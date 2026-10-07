@@ -1,30 +1,15 @@
-"""A `date` event column: refused where the adapter can see it, and what to write instead.
+"""The window is attached to the *upstream* relation, and the refusal of a DATE event column.
 
-dbt-core selects a batch with `event_time >= '<start>' and event_time < '<end>'`, and renders those
-boundaries timestamp-shaped - `2025-05-01 00:00:00+00:00`. MaxCompute does not convert that text
-against a `DATE` column and does not raise either: the comparison evaluates to `NULL`. No row
-satisfies a `NULL` predicate, so a batch over a DATE event column selects nothing; a batch write is
-an `insert overwrite`, and an empty one is a no-op - so the target stays empty while `dbt run`
-reports the model as a success. Measured on a real project with four rows across two days: `PASS=2`,
-zero rows in the target, and the same `NULL` in `Etc/GMT`, `Asia/Shanghai` and `Etc/GMT+8` sessions,
-so unlike the profile-`timezone` defect this is not a clock disagreement.
+Two things the repository had not pinned before, both from the 87422681 investigation:
 
-The window is attached to *upstream* relations that declare `event_time`, which is what makes the
-remedy non-obvious: the column that has to stop being a DATE is the one the window is compared
-against, not the one the model finally writes. Three consequences are pinned here.
-
-* `TestMicrobatchDateColumnIsRefused` - the shape a user reports: the model declares its event
-  column as a `date` partition column. That is refused at compile time, in
-  `mc_validate_microbatch_config`, because the declared `partition_by.data_type` is the only signal
-  available where the boundary is rendered (dbt-core's `render_event_time_filtered` is handed a
-  field name, not a column type).
-* `TestMicrobatchCastInsideModelIsStillEmpty` - the same model, refused no longer, casting the DATE
-  to `timestamp` *in its own SELECT*: still empty, still a successful run, because the window was
-  applied to the DATE column of the upstream relation. This is a residual limitation, pinned so the
-  next person does not present it as a fix.
-* `TestMicrobatchDateColumnWorkaround` - the working shape: cast in the upstream model and declare
-  `event_time` on that instant. Each day window writes its own rows into its own partition, and
-  replaying the first window does not erase the second.
+* where the batch predicate is applied - dbt-core resolves `event_time` on the relation being read
+  and wraps *that* one, so a `cast()` inside the microbatch model's own SELECT is applied after the
+  window; it does not rescue a DATE-typed upstream column;
+* what this adapter does about a DATE event column now. MaxCompute evaluates
+  `DATE >= '2025-05-01 00:00:00+00:00'` as NULL rather than raising, so every batch selected zero
+  rows and `dbt run` still reported `PASS` with the target empty (measured: `PASS=2`, 0 rows, in
+  `Etc/GMT`, `Asia/Shanghai` and `Etc/GMT+8` alike). `mc_validate_microbatch_config` now refuses the
+  declared combination instead of letting it look like a successful run.
 """
 
 import os
@@ -101,6 +86,11 @@ class _WindowedScenario:
         )
         return sorted(p.name for p in table.partitions)
 
+    def _target_exists(self, project):
+        return project.adapter.get_odps_client().exist_table(
+            self.model_name, schema=project.test_schema
+        )
+
     def _window(self, project, start, end, select=None):
         args = ["run", "--event-time-start", start, "--event-time-end", end]
         if os.environ.get("MB_DEBUG_SQL"):
@@ -132,6 +122,9 @@ class TestMicrobatchDateColumnIsRefused(_WindowedScenario):
             expect_pass=None,
         )
         assert _REASON in output, f"expected the refusal in:\n{output}"
+        assert not self._target_exists(
+            project
+        ), "a refused model must not leave an empty target behind for a downstream to read"
 
 
 class TestMicrobatchCastInsideModelIsStillEmpty(_WindowedScenario):
