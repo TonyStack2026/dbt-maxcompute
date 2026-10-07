@@ -103,12 +103,15 @@ So no type-blind rendering exists: the date-only text either silently empties a 
 failure. The combination is refused at compile time instead, in `mc_validate_microbatch_config`,
 keyed on the declared `partition_by.data_type` - the one signal that is available there.
 
-The `datetime` row against the offset-bearing text is measured on a real `datetime` **column**
-(`select count(*) ... where event_time >= '2025-05-01 00:00:00+00:00' ...` returns ODPS-0130071 in an
-`Etc/GMT` and an `Asia/Shanghai` session alike), not as a dbt run - so this page does not claim a
-datetime microbatch model works or fails, only that its batch predicate is rejected by the server
-rather than evaluated. That is a loud failure rather than a silent empty target, and it is a separate
-question from the one this page refuses; it is recorded as the next thing to measure.
+One reading is recorded without being acted on, and it is now measured as a model too: a `datetime`
+event column against the offset-bearing text dbt renders fails at the server -
+`ODPS-0130071 ... ODPS-0121095: Invalid argument - in function cast, string datetime's format must be
+yyyy-mm-dd hh:mi:ss, input string is:2025-05-01 00:00:00+00:00` - with the node reported as an error.
+So a `datetime` microbatch model does not run on this adapter's default profile; the same comparison
+as a bare `datetime` column fails in an `Etc/GMT` and an `Asia/Shanghai` session alike, while the
+offset-free text `>= '2025-05-01 00:00:00'` selects its day normally. That is a loud failure rather
+than a silent empty target, so it is a separate problem from the one this page refuses, and it is
+tracked separately rather than folded into this change.
 
 **What to write instead.** The window is attached to the *upstream* relation - dbt-core wraps every
 ref or source that declares `event_time` - so it is that column which has to stop being a DATE. Cast
