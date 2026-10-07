@@ -65,13 +65,21 @@ So on the adapter's default profile - no `timezone` in the profile, so the sessi
 microbatch model whose event column is `datetime` could not run at all, while the same model on
 `timestamp` ran. The adapter now states the window **without the offset suffix** whenever the
 session clock is UTC, which leaves the instant the window means unchanged. Measured on a real
-project, three column types x three boundary texts x the same window:
+project, three column types x three boundary texts, each repeated on three session clocks
+(`Etc/GMT`, `Asia/Shanghai`, `Etc/GMT+8`). The table states whether a text **parses** - which rows a
+session picks with a text that parses depends on its clock, and that is the next section's subject:
 
 | Event column | `'2025-05-01 09:00:00'` | `'2025-05-01 09:00:00+00:00'` | `'2025-05-01 09:00:00.500000'` |
 | --- | --- | --- | --- |
-| `datetime` | compares, and hits its rows | **refused** (`ODPS-0121095`) | **refused** (`ODPS-0121095`) |
-| `timestamp` | compares | compares | compares |
-| `timestamp_ntz` | compares | compares | compares |
+| `datetime` | parses; selects its rows on a UTC session | refused (`ODPS-0121095`) | refused (`ODPS-0121095`) |
+| `timestamp` | parses | parses | parses |
+| `timestamp_ntz` | parses | parses | parses |
+
+Removing the suffix moves no window: on a given session clock, the same rows were selected with
+and without the `+00:00` suffix for both `timestamp` and `timestamp_ntz` (measured 2026-10-07 at
+18:43 on a real project, three session clocks x both texts). Only the session clock decides which
+rows a text selects - the subject of the next section - and `datetime` is the one type that parses
+only the suffix-free form.
 
 `date` does not appear above because no text in it compares: a `date` event column yields NULL
 against all three, so every batch selects nothing while the run still reports success. That is a
