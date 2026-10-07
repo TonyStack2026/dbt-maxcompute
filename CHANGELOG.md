@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reason, instead of failing with a missing-file error inside the profile
   fixture.
 
+- Microbatch models whose event-time column is a `datetime` can now run on the
+  adapter's default profile. dbt-core renders the batch window from a UTC
+  `datetime`, so the text carries an offset (`event_time >= '2025-05-01
+  00:00:00+00:00'`); MaxCompute compares that against `timestamp` columns but
+  refuses it for `datetime` ones, whose string form is `yyyy-mm-dd hh:mi:ss`
+  exactly, so every batch failed while the physical plan was generated. The
+  boundary is now stated without the offset suffix - and only where the session
+  clock reads UTC, so the window denotes the same instant. Sessions pinned to
+  another zone are untouched, and microseconds are kept rather than rounded:
+  a `datetime` column rejects fractional seconds too, so a `--sample` window
+  against one still fails to compile instead of silently changing the window.
+  See `docs/microbatch-support.md`.
+
 ## [1.11.3b3] — 2026-08-26
 
 ### Fixed
