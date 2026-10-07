@@ -95,18 +95,24 @@ def is_utc_session(name: Optional[str]) -> bool:
 
 
 def _resolve(name: str):
-    """Best-effort lookup of a timezone name using what the host provides, ``None`` if absent."""
+    """Best-effort lookup of a timezone name, ``None`` when nothing here can resolve it.
+
+    ``zoneinfo`` reads the host's own tz database, which is the fresher source and what a Linux
+    or macOS runner has. ``pytz`` - already a dependency of the stack this adapter builds on, and
+    of dbt-core's own microbatch builder - carries a copy of that database with it, which is what
+    lets a Windows host with no system tz data still resolve the profile's zone.
+    """
     try:
         from zoneinfo import ZoneInfo
 
         return ZoneInfo(name)
-    except Exception:  # noqa: BLE002 - missing tzdata on the host is expected on some platforms
+    except Exception:  # noqa: BLE001 - absent tzdata on the host is expected on some platforms
         pass
     try:
-        from dateutil import tz
+        import pytz
 
-        return tz.gettz(name)
-    except Exception:  # noqa: BLE002
+        return pytz.timezone(name)
+    except Exception:  # noqa: BLE001 - unknown name: the caller degrades, it does not guess
         return None
 
 

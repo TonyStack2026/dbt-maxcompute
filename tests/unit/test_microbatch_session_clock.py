@@ -180,6 +180,24 @@ def test_unresolvable_zone_name_falls_back_to_dbt_core_rendering(session_tz):
     assert rendered() == base_window()
 
 
+def test_pytz_is_used_when_the_host_has_no_tz_database(monkeypatch):
+    """A host without system tz data (a bare Windows install) still resolves the profile's zone.
+
+    `pytz` ships its own copy of the tz database and is already in the dependency set, so it is
+    the fallback - and it is the only branch a Windows runner would take. Forced here by breaking
+    `zoneinfo`, because on this host the primary branch always wins.
+    """
+    import zoneinfo
+
+    def boom(name):
+        raise LookupError(f"no tzdata for {name}")
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", boom)
+    assert session_clock.as_session_wall_clock(START, "Asia/Shanghai") == "2025-05-01 08:00:00"
+    assert session_clock.as_session_wall_clock(START, "Etc/GMT+8") == "2025-04-30 16:00:00"
+    assert session_clock.as_session_wall_clock(START, "Not/AZone") is None
+
+
 def test_no_filter_renders_the_relation_unchanged():
     plain = MaxComputeRelation.create(database="p", schema="s", identifier="t")
     assert plain.render_event_time_filtered() == plain.render()
