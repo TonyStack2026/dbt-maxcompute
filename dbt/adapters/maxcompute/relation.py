@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from typing import FrozenSet, Optional, TypeVar
 
-from dbt.adapters.base.relation import BaseRelation, InformationSchema
+from dbt.adapters.base.relation import BaseRelation, EventTimeFilter, InformationSchema
 from dbt.adapters.contracts.relation import RelationType, Path, Policy, RelationConfig
 from odps.models import Table
+
+from dbt.adapters.maxcompute import session_clock
 
 from dbt.adapters.maxcompute.relation_configs._materialized_view import (
     MaxComputeMaterializedViewConfig,
@@ -48,6 +50,44 @@ class MaxComputeRelation(BaseRelation):
             }
         )
     )
+
+    def _render_event_time_filtered(self, event_time_filter: EventTimeFilter) -> str:
+        """State the batch window on the clock ``trunc_time()`` cuts partitions on.
+
+        dbt-core compares ``event_time`` against a UTC boundary rendered as a timestamp string.
+        MaxCompute parses that string on the session timezone, while the partitions the batch is
+        overwritten into come from ``trunc_time()``, which cuts UTC days. Those two clocks line up
+        on the adapter's default profile because it submits ``odps.sql.timezone=Etc/GMT``, but a
+        profile that sets ``timezone`` moves only the window: one batch then reaches into the
+        partition of its neighbour and the later ``insert overwrite`` erases the earlier rows.
+
+        The fix writes the boundary as the session's own reading of the same UTC instant, which the
+        server parses back into that instant. The boundary stays a plain string literal - the same
+        shape dbt-core renders today, rather than a function call whose cost the optimizer would
+        have to absorb - and the UTC-session path keeps rendering exactly the SQL it renders now.
+
+        Returns dbt-core's rendering when the session clock is unknown or cannot be resolved
+        locally: guessing a shift would be worse than leaving the known behaviour in place.
+        """
+        base = super()._render_event_time_filtered(event_time_filter)
+        session = session_clock.session_timezone()
+        if not base or not session or session_clock.is_utc_session(session):
+            return base
+
+        field = event_time_filter.field_name
+        parts = []
+        for boundary, operator in (
+            (event_time_filter.start, ">="),
+            (event_time_filter.end, "<"),
+        ):
+            if boundary is None:
+                continue
+            wall_clock = session_clock.as_session_wall_clock(boundary, session)
+            if wall_clock is None:
+                return base
+            parts.append(f"{field} {operator} '{wall_clock}'")
+
+        return " and ".join(parts) if parts else base
 
     @property
     def project(self):
